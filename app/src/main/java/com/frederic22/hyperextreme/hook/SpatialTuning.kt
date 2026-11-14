@@ -46,8 +46,8 @@ internal object SpatialTuning {
         private set
 
     private const val PROP_CACHE_MS = 500L
-    private const val PAN_DEG_MIN = 0.5f
-    private const val PAN_DEG_MAX = 4f
+    private const val PAN_DEG_MIN = 0.1f
+    private const val PAN_DEG_MAX = 10f
     private const val DK_MIN = 0.02f
     private const val DK_MAX = 0.30f
     private const val PAN_DEG_DEFAULT = 1.4f
@@ -63,6 +63,15 @@ internal object SpatialTuning {
     const val IOS_SHADOW_ALPHA = 0.45f
     const val IOS_SHADOW_DX = 0.006f
     const val IOS_SHADOW_DY = 0.010f
+
+    /**
+     * iOS 模式：主体轮廓硬化宽度（shader 里对 alpha 再走一次 smoothstep）。
+     *
+     * 分层给的 alpha 是**软过渡**（羽化 4px + 深度带），转动时那圈半透明会被拉开成
+     * "果冻边" —— 这就是用户说的「边缘还是会变形」。iOS 的抠像是硬的（1px 反锯齿），
+     * 柔和感由投影负责。0.06 ⇒ 过渡落在 alpha 0.44..0.56，约 1px。
+     */
+    const val IOS_ALPHA_CUT = 0.06f
 
     private var readAt = 0L
 
