@@ -89,8 +89,8 @@ class SpatialWallpaperService : WallpaperService() {
         private var uDkTh = 0
         private var uDim = 0
         /** 幅度补偿（见 SpatialTuning.kScale）：深度对比度系数 / 枢轴。 */
-        private var uKScale = 0
-        private var uKMid = 0
+        private var uFlatK = 0
+        private var uFlatAmt = 0
         // 显示区域（2026-11-05）：uv' = uv * uUvScale + uUvOffset
         private var uUvScale = 0
         private var uUvOffset = 0
@@ -419,8 +419,8 @@ class SpatialWallpaperService : WallpaperService() {
             uDepthCh = GLES20.glGetUniformLocation(p, "uDepthCh")
             uDkTh = GLES20.glGetUniformLocation(p, "uDkTh")
             uDim = GLES20.glGetUniformLocation(p, "uDim")
-            uKScale = GLES20.glGetUniformLocation(p, "uKScale")
-            uKMid = GLES20.glGetUniformLocation(p, "uKMid")
+            uFlatK = GLES20.glGetUniformLocation(p, "uFlatK")
+            uFlatAmt = GLES20.glGetUniformLocation(p, "uFlatAmt")
             uUvScale = GLES20.glGetUniformLocation(p, "uUvScale")
             uUvOffset = GLES20.glGetUniformLocation(p, "uUvOffset")
             val verts = floatArrayOf(
@@ -678,9 +678,9 @@ class SpatialWallpaperService : WallpaperService() {
             GLES20.glUniform1f(uDkTh, SpatialGlCore.DK_TH)
             // 幅度补偿：与 LSPosed 链同一套（>2.6° 压缩深度对比度，避免梯度项变负 = 内容回折）
             GLES20.glUniform1f(
-                uKScale, com.frederic22.hyperextreme.hook.SpatialTuning.kScale(panRad),
+                uFlatK, com.frederic22.hyperextreme.hook.SpatialTuning.FLAT_K,
             )
-            GLES20.glUniform1f(uKMid, com.frederic22.hyperextreme.hook.SpatialTuning.K_MID)
+            GLES20.glUniform1f(uFlatAmt, com.frederic22.hyperextreme.hook.SpatialTuning.flattenFor(panRad))
             // 系统壁纸服务链由**系统**做 AOD 压暗（setWallPaperAnimProcess），这里恒 1.0。
             GLES20.glUniform1f(uDim, 1f)
 
