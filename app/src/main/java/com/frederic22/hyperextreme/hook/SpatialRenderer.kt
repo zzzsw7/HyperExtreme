@@ -123,7 +123,27 @@ internal object SpatialRenderer {
      */
     private const val VERT = SpatialGlCore.VERT
 
-    /** 片元着色器（球面 uv + 逐像素位移 + AOD 压暗）见 [SpatialGlCore.FRAG]。 */
+    /**
+     * AOD 时**是否自己在 shader 里压暗**。
+     *
+     * `true`（2026-11-13 校准后默认）：系统对**我们这层**几乎不压（实测 AOD 只降 6.5%），
+     * 而对它自己的壁纸压得更多 ⇒ 不补就会偏亮。补的方式见 [AOD_DIM_GAMMA]。
+     * `false`：完全不压（旧版行为），只在某些 ROM 会连带压子层时用。
+     */
+    private const val AOD_SELF_DIM = true
+
+    /**
+     * AOD 压暗的**幂指数**：`uDim = (1 - black)^gamma`。
+     *
+     * 真机标定（2026-11-13，区域 700..1000 × 700..1100 的平均亮度）：
+     * * 空间壁纸 AOD 不压暗：151.5
+     * * 官方 AOD（关掉空间壁纸）：94.8 ← 目标
+     * * `uDim = 1 - black`（gamma 1.0）：89.6 ✓ 与官方差 5% 以内
+     *
+     * 调大更暗、调小更亮。
+     */
+    private const val AOD_DIM_GAMMA = 1.0
+
     private const val FRAG = SpatialGlCore.FRAG
 
     // ─────────────────── 密码页连续模糊（2026-10-29 定案：**不自绘**）───────────────────
@@ -165,6 +185,17 @@ internal object SpatialRenderer {
      */
     @Volatile
     private var runningLockDepth = false
+
+    /**
+     * **让位（封面模式）期间为 true**：图层被 `hide` 掉、但 GL 资源（纹理 / EGL surface /
+     * SurfaceControl）**全部保留**。
+     *
+     * 2026-11-13 改：原来是直接 `stop()` —— 那会把 27MB 纹理删掉、EGL 重建，
+     * 每次进出封面都要几百毫秒，观感就是"切换慢 + 卡顿"。改成只 hide/show 之后，
+     * 进封面只要一次 Transaction，出封面一次 show + 补一帧。
+     */
+    @Volatile
+    private var suspended = false
 
     /**
      * 一个**挂载目标** = 一条壁纸 leash 上的一份 SC + 它的 EGL 画布。
@@ -734,11 +765,18 @@ internal object SpatialRenderer {
             // 诊断（2026-11-07）：自定义 AOD 下 black=1.0 ⇒ 目标 0（全黑）。
             HookRuntime.log(
                 "SPATIAL AOD 进入 black=${"%.2f".format(black)} " +
-                    "目标=${"%.2f".format(1f - black.coerceIn(0f, 1f))} " +
+                    "目标=${"%.2f".format(if (AOD_SELF_DIM) Math.pow((1f - black.coerceIn(0f, 1f)).toDouble(), AOD_DIM_GAMMA).toFloat() else 1f)} " +
                     "aodDim=${"%.2f".format(aodDim)} transFrozen=$transitionFrozen",
             )
             startAodHomingLocked(h)
-            animateDimLocked(h, 1f - black.coerceIn(0f, 1f), AOD_ANIM_MS)
+            // AOD 压暗：shader 里乘 uDim（2026-11-13 定案；另两种方案真机验证不可用，已删）。
+            val base = 1f - black.coerceIn(0f, 1f)
+            val aodTarget = if (AOD_SELF_DIM) {
+                Math.pow(base.toDouble(), AOD_DIM_GAMMA).toFloat().coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            animateDimLocked(h, aodTarget, AOD_ANIM_MS)
             // **AOD 第一帧就要可见**（v1.20.5）：进 AOD 可能紧跟一次解锁淡出，alpha 停在 0
             // 且 800ms 锁存把复位压到 ~817ms 后 ⇒ 那段露的是系统原壁纸。
             // 顺序放在压暗之后：先下发内容（dim 目标）再抬 alpha，避免"新 alpha + 旧亮帧"闪一帧。
@@ -758,6 +796,7 @@ internal object SpatialRenderer {
             aodActive = false
             cancelAodHomeLocked()
             aodFrozen = false
+
             // **必须解冻再跑复位渐变**（2026-11-07）：`applyDimLocked` 走 `requestDraw`，
             // 而 `requestDraw` 在 `transitionFrozen` 时整段早退 ⇒ 渐变数值在涨、buffer 却
             // 一直是黑帧，表现和「压暗不恢复」一模一样（退出回调本身不来时就是真不恢复）。
@@ -1076,6 +1115,13 @@ internal object SpatialRenderer {
     /** 当前 SC 的 alpha（只在 GL 线程读写）。用于**幂等**：值没变就不提交 Transaction。 */
     private var currentAlpha = 1f
 
+    /** 让位期间"抬 alpha 被拒"只记一条日志（见 applyAlphaTo）。 */
+    private var loggedSuspendRaise = false
+
+    /** 隐藏态保活重绘的最小间隔（见 drawAllFrames）。 */
+    private var hiddenDrawAt = 0L
+    private const val HIDDEN_DRAW_MS = 120L
+
     /**
      * **当前该画桌面份吗**（2026-10-30，v1.5.73）。
      *
@@ -1115,6 +1161,20 @@ internal object SpatialRenderer {
      */
     private fun applyAlphaTo(scs: List<android.view.SurfaceControl>, alpha: Float) {
         if (scs.isEmpty()) return
+        // **让位期间拒绝一切"抬 alpha"**（2026-11-13 真机问题）。
+        //
+        // 症状：锁屏直接进封面时，背景仍是空间壁纸（封面被我们盖住），但歌词正常显示。
+        // 原因：我们让位时把 alpha 压到 0，随后系统的亮屏/复位路径（`resetAlpha`、
+        // `raiseLockedNow`）又把它抬回 1 —— 封面在**我们下面**，于是被盖住了；
+        // 歌词在 SystemUI 窗口里、在我们上面，所以照常显示。
+        // 让位期间唯一合法的 alpha 是 0（由 resumeInternal 负责恢复）。
+        if (suspended && alpha > 0.01f) {
+            if (!loggedSuspendRaise) {
+                loggedSuspendRaise = true
+                HookRuntime.log("SPATIAL 让位中：忽略抬 alpha(${"%.2f".format(alpha)}）")
+            }
+            return
+        }
         // 锁存窗口内**任何** raise 都拒绝（不止 resetAlpha 一条路能到这里）。
         // 挡下的请求记 pending，**并自己调度补发** —— 否则万一这次是唯一的 raise，
         // 就永久停在 0（锁屏黑屏）。
@@ -1722,6 +1782,7 @@ internal object SpatialRenderer {
      * 否则会停在旧的模糊程度上）。
      */
     private fun requestDraw(force: Boolean = false) {
+        // 让位期间也照常重绘（见 drawAllFrames 的说明）。
         // 过渡期冻结：任何重绘都会和「切换」抢帧预算（见 transitionFrozen）
         if (transitionFrozen) {
             if (frozenAt > 0L && SystemClock.elapsedRealtime() - frozenAt > FROZEN_TIMEOUT_MS) {
@@ -1731,6 +1792,19 @@ internal object SpatialRenderer {
             }
         }
         val now = SystemClock.elapsedRealtime()
+        // **让位期间把整个入口压到 8fps**（2026-11-13 优化，真机 CPU 实测）：
+        // 之前只节流 drawAllFrames，而 SpatialOverlay.onAttitudeChanged() 与 post 仍在
+        // 传感器 120Hz 节拍上跑 —— 封面态 systemui 因此烧到 57~80%（对照：渲染器关掉时 12%）。
+        // 姿态变量在传感器回调里照常更新，所以 buffer 依旧是"当前姿态"。
+        if (suspended && !force) {
+            if (now - hiddenDrawAt < HIDDEN_DRAW_MS) return
+            hiddenDrawAt = now
+            handler?.post {
+                if (runningKey == null) return@post
+                runCatching { drawAllFrames() }
+            }
+            return
+        }
         if (!force) {
             if (hasDrawn &&
                 kotlin.math.abs(yaw - lastDrawnYaw) < DRAW_EPS &&
@@ -1751,6 +1825,79 @@ internal object SpatialRenderer {
             if (runningKey == null) return@post
             runCatching { drawAllFrames() }
         }
+    }
+
+    /**
+     * **让位：隐藏图层，保留一切 GL 资源**（2026-11-13）。
+     *
+     * 与 [stop] 的区别：不删纹理、不释放 surface、不 remove SurfaceControl，
+     * 只对每个挂载目标做一次 `Transaction#hide`。恢复时 `show` + 补一帧即可。
+     * 这是"切换卡顿"的根治手段 —— 拆建一次要重传 27MB 纹理。
+     */
+    fun suspendForYield() {
+        handler?.post { suspendInternal() }
+    }
+
+    private fun suspendInternal() {
+        if (runningKey == null || suspended || mounts.isEmpty()) return
+        suspended = true
+        loggedSuspendRaise = false
+        // **必须把 rendering 置 0**：miwallpaper 侧靠它判断"我们的图真的在显示"，
+        // 为真时会在淡出把系统壁纸 alpha 压 0 —— 让位期间那正好会把封面压没。
+        // （原来是 stop()，那个路径本来就会写 0；改成 hide 之后要自己补上。）
+        setProp(com.frederic22.hyperextreme.data.SpatialFlag.PROP_RENDERING, "0")
+        runCatching {
+            // **走渲染器自己的 alpha 通道**（2026-11-13）：直接对 SC 设 alpha 会被
+            // `applyAlphaTo` 的 `currentAlpha` 与淡出 tick 覆盖回去 —— 那正是"还能看到系统壁纸"的原因。
+            // 顺手清掉淡出锁存，否则 800ms 内任何"抬 alpha"都会被推迟。
+            cancelFadeLocked()
+            pendingRaise = false
+            fadeDoneAt = 0L
+            applyAlphaTo(mounts.map { it.sc }, 0f)
+            HookRuntime.log("SPATIAL 让位：alpha→0（buffer 保留）")
+        }.onFailure {
+            HookRuntime.log("SPATIAL 让位：设 alpha 失败：${it.javaClass.simpleName}: ${it.message}")
+        }
+    }
+
+    /** 让位结束：重新显示图层并**强制补一帧**（否则显示的是隐藏前的旧姿态）。 */
+    fun resumeFromYield() {
+        handler?.post { resumeInternal() }
+    }
+
+    private fun resumeInternal() {
+        if (runningKey == null || !suspended) return
+        suspended = false
+        // 图层重新可见 ⇒ 恢复"我们的图在显示"的声明（见 suspendInternal 的说明）。
+        setProp(com.frederic22.hyperextreme.data.SpatialFlag.PROP_RENDERING, "1")
+        // **先画、再抬 alpha，且留两帧余量**（2026-11-13）：
+        // 顺序反了会先露出"隐藏前那张旧姿态的帧"⇒ 整张图位置跳一下。
+        // 但只补一帧不够：alpha=0 时提交的 buffer 要等下一次合成才被采信，
+        // 所以这里连补两帧，再隔两帧才抬 alpha。
+        runCatching { forceDraw() }
+            .onFailure { HookRuntime.log("SPATIAL 让位结束：补帧失败：${it.javaClass.simpleName}") }
+        val h = handler
+        if (h != null) {
+            h.postDelayed({
+                if (!suspended) runCatching { forceDraw() }
+            }, 16L)
+            h.postDelayed({
+                if (!suspended) {
+                    cancelFadeLocked()
+                    pendingRaise = false
+                    fadeDoneAt = 0L
+                    applyAlphaTo(mounts.map { it.sc }, 1f)
+                    HookRuntime.log("SPATIAL 让位结束：alpha→1（当前=${"%.2f".format(currentAlpha)}）")
+                }
+            }, 32L)
+            return
+        }
+        // 没有 handler（异常路径）：退化成同步抬 alpha。
+        cancelFadeLocked()
+        pendingRaise = false
+        fadeDoneAt = 0L
+        applyAlphaTo(mounts.map { it.sc }, 1f)
+        HookRuntime.log("SPATIAL 让位结束：alpha→1（当前=${"%.2f".format(currentAlpha)}）")
     }
 
     private fun stopInternal(reason: String) {
@@ -2171,6 +2318,14 @@ internal object SpatialRenderer {
      * （先背景后主体，与它们的 z 序一致）。只画一份会出现"主体区域是上一帧的旧内容"。
      */
     private fun drawAllFrames(): Boolean {
+        // **让位期间仍然画，但要节流**（2026-11-13 优化）：
+        // 完全不画 ⇒ 恢复时拿到旧姿态，整张图跳一下；每帧都画 ⇒ 封面期间白烧 GPU（用户反馈变卡）。
+        // 折中：隐藏态最多 8fps 保活，真正恢复前再由 resumeInternal 的 forceDraw 补当前姿态。
+        if (suspended) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - hiddenDrawAt < HIDDEN_DRAW_MS) return true
+            hiddenDrawAt = now
+        }
         val wantLocked = activeMountIsLocked()
         val group = mounts.filter { it.locked == wantLocked }.ifEmpty { mounts }
         if (group.isEmpty()) return false
