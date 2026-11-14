@@ -647,9 +647,23 @@ class MaskPrefs(context: Context) {
      */
     val spatialPanDeg: Float
         get() = prefs.getFloat(KEY_SPATIAL_PAN_DEG, SPATIAL_PAN_DEG_DEFAULT)
+            .coerceIn(SPATIAL_PAN_DEG_MIN, SPATIAL_PAN_DEG_MAX)
 
     fun setSpatialPanDeg(value: Float) {
         prefs.edit().putFloat(KEY_SPATIAL_PAN_DEG, value).commit()
+    }
+
+    /**
+     * 「iOS 立体感」（2026-11-14，默认关）。
+     *
+     * 开 = 主体层刚性平移（内部不形变）+ 背景 0.35 倍跟随 + 主体在背景上投一层影，
+     * 观感接近 iOS 26 的空间壁纸；关 = 原来的两层逐像素位移。
+     */
+    val spatialIosMode: Boolean
+        get() = prefs.getBoolean(KEY_SPATIAL_IOS, SPATIAL_IOS_DEFAULT)
+
+    fun setSpatialIosMode(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SPATIAL_IOS, value).commit()
     }
 
     /**
@@ -1092,6 +1106,8 @@ class MaskPrefs(context: Context) {
         const val KEY_PARALLAX_GYRO_DEG = "parallax_gyro_deg"
     const val KEY_SPATIAL_PAN_DEG = "spatial_pan_deg"
     const val KEY_SPATIAL_EDGE_FUSION = "spatial_edge_fusion"
+    /** 「iOS 立体感」（2026-11-14）：true = 主体刚性 + 背景慢跟随 + 主体投影。 */
+    const val KEY_SPATIAL_IOS = "spatial_ios"
 
         /** 「壁纸改变后自动关闭替换」（视差页开关，默认开）+ 「视差基准」壁纸判据（2026-10-15 加）。 */
         const val KEY_PARALLAX_AUTO_OFF = "parallax_auto_off_on_wallpaper_change"
@@ -1133,13 +1149,22 @@ class MaskPrefs(context: Context) {
         const val PARALLAX_GYRO_DEG_MIN = 15f
         const val PARALLAX_GYRO_DEG_MAX = 45f
         const val PARALLAX_GYRO_DEG_DEFAULT = 25f
-    /** 空间壁纸位移幅度：度。默认 10 = 渲染侧原来的编译期常量 `PAN_RAD`。 */
-    const val SPATIAL_PAN_DEG_MIN = 4f
-    const val SPATIAL_PAN_DEG_MAX = 20f
-    const val SPATIAL_PAN_DEG_DEFAULT = 10f
+    /**
+     * 空间壁纸位移幅度：度。默认 1.4 = 渲染侧老的编译期常量 `PAN_RAD`（1.394°）。
+     *
+     * ⚠️ 上限 4° 是**几何硬限**，不是随意取值：`SpatialGlCore.geometry()` 用
+     * `SPHERE_SAFE = 1.15` 给位移留的 uv 余量是 0.0652，而位移占用
+     * `0.5·panRad·K_MAX/span`（K_MAX = 0.6175）⇒ 超过约 4.37° 时满倾角会采到图外，
+     * 屏幕边缘出现透明/黑边。要再往上调，必须同时调大 SPHERE_SAFE。
+     */
+    const val SPATIAL_PAN_DEG_MIN = 0.5f
+    const val SPATIAL_PAN_DEG_MAX = 4f
+    const val SPATIAL_PAN_DEG_DEFAULT = 1.4f
     const val SPATIAL_DK_MIN = 0.02f
     const val SPATIAL_DK_MAX = 0.30f
     const val SPATIAL_EDGE_FUSION_DEFAULT = 0.08f
+    /** 「iOS 立体感」默认**关**：打开才换成「主体刚性 + 背景慢跟随 + 主体投影」。 */
+    const val SPATIAL_IOS_DEFAULT = false
 
         /** 幅度上限公式里的安全边距（px）——「最大余量 − 5px」，用户定。 */
         const val PARALLAX_AMP_MARGIN_PX = 5f
