@@ -1152,13 +1152,12 @@ class MaskPrefs(context: Context) {
     /**
      * 空间壁纸位移幅度：度。默认 1.4 = 渲染侧老的编译期常量 `PAN_RAD`（1.394°）。
      *
-     * ⚠️ 上限 4° 是**几何硬限**，不是随意取值：`SpatialGlCore.geometry()` 用
-     * `SPHERE_SAFE = 1.15` 给位移留的 uv 余量是 0.0652，而位移占用
-     * `0.5·panRad·K_MAX/span`（K_MAX = 0.6175）⇒ 超过约 4.37° 时满倾角会采到图外，
-     * 屏幕边缘出现透明/黑边。要再往上调，必须同时调大 SPHERE_SAFE。
+     * 量程 0.1–10°、步进 0.1°（2026-11-14 用户定）。大角度**不再有硬限**：
+     * `SpatialGlCore.geometry()` 会按实际幅度把安全边距抬到 `1 + panRad·K_MAX/span0`
+     * （10° 时约 1.38，画面随之略微放大），保证满倾角不会采到图外。
      */
-    const val SPATIAL_PAN_DEG_MIN = 0.5f
-    const val SPATIAL_PAN_DEG_MAX = 4f
+    const val SPATIAL_PAN_DEG_MIN = 0.1f
+    const val SPATIAL_PAN_DEG_MAX = 10f
     const val SPATIAL_PAN_DEG_DEFAULT = 1.4f
     const val SPATIAL_DK_MIN = 0.02f
     const val SPATIAL_DK_MAX = 0.30f
