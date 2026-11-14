@@ -39,6 +39,10 @@ internal object SpatialGlCore {
      * （不是 1），所以 1.15 给 0.0652 余量 vs 0.0451 需求 ⇒ **1.45 倍，够用**。
      * 若以后调大 `WARP_GAIN` 或 `PAN_RAD`，必须重算这一条。
      */
+    /**
+     * 基础安全边距（1.15）。**只是下限**：真正的边距由 [geometry] 按当前 `panRad` 抬到
+     * `1 + panRad·K_MAX/span0`（幅度 10° 时约 1.38）—— 固定 1.15 只够 3.8°。
+     */
     const val SPHERE_SAFE = 1.15f
 
     /**
@@ -116,6 +120,11 @@ internal object SpatialGlCore {
         uniform float uShadow;      // 1 = 这一遍画的是投影（只输出黑色 + alpha）
         uniform float uShadowA;     // 投影不透明度
         uniform vec2 uUvNudge;      // 投影相对主体的固定偏移（光从左上来 ⇒ 影子往右下）
+        // 「iOS 立体感」第二版（2026-11-14）：**收硬主体轮廓**。
+        // 分层时 alpha 是软过渡（羽化 4px + 深度带），转动时那一圈半透明会被拉开成"果冻边"。
+        // iOS 的抠像是硬的（1px 反锯齿），柔和感由投影提供 ⇒ 这里把 alpha 重新做一次
+        // smoothstep 硬化：0 = 不处理，0.06 = 在 alpha 0.44..0.56 之间过渡（约 1px）。
+        uniform float uAlphaCut;
         // 显示区域（2026-11-04）：uv' = uv * uUvScale + uUvOffset
         // scale = 1/zoom，offset = c − 0.5/zoom（见 `SpatialCrop`）。
         // ⚠️ 深度场与颜色**必须用同一套变换**，否则位移场和图像错位、主体会飘。
@@ -165,7 +174,16 @@ internal object SpatialGlCore {
             //
             // AOD 压暗在**绘制阶段**乘 uDim（系统壁纸服务链由系统自己压暗，传 1.0 即可）：
             // 合成阶段的 `Transaction#setColor` 在 HyperOS 上实测**仍会发白**（2 参 3 参都一样）。
-            gl_FragColor = vec4(c.rgb * uDim, mix(c.a, 1.0, uOpaque));
+            float a = mix(c.a, 1.0, uOpaque);
+            vec3 rgb = c.rgb;
+            if (uAlphaCut > 0.0 && uOpaque < 0.5) {
+                // 收硬轮廓：把软过渡压到 ~1px，并把预乘的 RGB 按新 alpha 重新归一，
+                // 否则边缘那一圈会因为 alpha 变小而发暗（预乘纹理的经典坑）。
+                float a2 = smoothstep(0.5 - uAlphaCut, 0.5 + uAlphaCut, c.a);
+                rgb = c.rgb * (a2 / max(c.a, 1e-4));
+                a = a2;
+            }
+            gl_FragColor = vec4(rgb * uDim, a);
         }
     """
 
@@ -212,7 +230,17 @@ internal object SpatialGlCore {
      * ⇒ 纵向被多放大 7~8%。正确做法是先算"不放大时"的角范围（图像按自身宽高比贴球面），
      * 再按屏幕需求取一个统一的放大倍数 m，**两个 span 同乘 m**，比例永远等于 imgAspect。
      */
-    fun geometry(screenW: Int, screenH: Int, layerW: Int, layerH: Int): Geometry {
+    fun geometry(
+        screenW: Int,
+        screenH: Int,
+        layerW: Int,
+        layerH: Int,
+        /**
+         * 当前「位移幅度」满量程角（弧度）。**必须传实际用到的值**：位移余量要按它算，
+         * 传默认 [PAN_RAD] 而实际调到 10°，满倾角就会采到图外（边缘透明/黑边）。
+         */
+        panRad: Float = PAN_RAD,
+    ): Geometry {
         val aspect = screenW.toFloat() / screenH
         val imgAspect = layerW.toFloat() / layerH
         val tanV = kotlin.math.tan(SPHERE_HALF_V_RAD.toDouble()).toFloat()
@@ -221,8 +249,12 @@ internal object SpatialGlCore {
         val spanX0 = SPHERE_HALF_V_RAD * imgAspect  // 图像水平半角（按图像宽高比）
         val needX = screenHalfH / spanX0            // 水平方向需要放多少倍才能盖住屏幕
         val needY = SPHERE_HALF_V_RAD / spanY0      // 垂直方向（= 1）
-        // SAFE 给位移留余量：uv 余量 = 0.5(1 − 1/SAFE)，需 ≥ 0.5·PAN_RAD·k_max/spanX。
-        val m = maxOf(needX, needY) * SPHERE_SAFE
+        // SAFE 给位移留余量：uv 余量 = 0.5(1 − 1/SAFE)，需 ≥ 0.5·panRad·k_max/(span0·SAFE)
+        //   ⇒ SAFE ≥ 1 + panRad·k_max/span0。
+        // 固定 1.15 只够 3.8°；量程开到 10° 必须按实际幅度放大（画面会随之略微放大）。
+        val needSafe = 1f + panRad * K_MAX / spanY0 * 1.1f   // 再留 10% 余量
+        val safe = maxOf(SPHERE_SAFE, needSafe)
+        val m = maxOf(needX, needY) * safe
         return Geometry(tanV * aspect, tanV, spanX0 * m, spanY0 * m)
     }
 }
