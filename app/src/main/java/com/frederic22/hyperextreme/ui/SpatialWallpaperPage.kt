@@ -2,6 +2,7 @@ package com.frederic22.hyperextreme.ui
 
 import android.graphics.RectF
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -315,34 +316,53 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
         busy = true
         scope.launch {
             val outcome = withContext(Dispatchers.IO) {
-                try {
-                    // ③ 深度池用完立刻还：深度图尺寸 = 层图尺寸，两份工作集（20n + 56n）
-                    // 同时常驻要 168MB，分层再要一块就撞堆上限（2026-10-31）。
-                    runCatching {
+                // 高分辨率（1152）可能把 256MB 堆顶穿：OOM 就**自动降一档重试**，
+                // 而不是直接失败。降到 768 仍失败才算真失败。
+                var tier = shortSide
+                var result: Result<Pair<SpatialDepth.Result, Result<SpatialLayers.Result>>>? = null
+                while (result == null) {
+                    val attempt = runCatching {
                         try {
-                            SpatialDepth.generate(ctx, uri, shortSide, force)
-                        } finally {
-                            SpatialDepth.dropPool()
-                        }
-                    }.map { depth ->
-                        // ⑦ OOM 自愈：换图时最缺的是「先回收再分配」，而 ART 只在分配失败时 GC。
-                        // 实测（run_log）：同一张图第一次 OutOfMemoryError、紧接着重试就能过。
-                        depth to runCatching { SpatialLayers.generate(ctx, depth.dir, uri, force) }
-                            .recoverCatching { e ->
-                                if (e !is OutOfMemoryError) throw e
-                                SpatialLayers.dropPool()
-                                System.gc()
-                                SpatialLayers.generate(ctx, depth.dir, uri, force)
+                            // ③ 深度池用完立刻还：深度图尺寸 = 层图尺寸，两份工作集（20n + 56n）
+                            // 同时常驻要 168MB，分层再要一块就撞堆上限（2026-10-31）。
+                            val depth = try {
+                                SpatialDepth.generate(ctx, uri, tier, force)
+                            } finally {
+                                SpatialDepth.dropPool()
                             }
+                            // ⑦ OOM 自愈：换图时最缺的是「先回收再分配」，而 ART 只在分配失败时 GC。
+                            depth to runCatching { SpatialLayers.generate(ctx, depth.dir, uri, force) }
+                                .recoverCatching { e ->
+                                    if (e !is OutOfMemoryError) throw e
+                                    SpatialLayers.dropPool()
+                                    System.gc()
+                                    SpatialLayers.generate(ctx, depth.dir, uri, force)
+                                }
+                        } finally {
+                            // ⑧ 分层池用完立刻还（2026-11-03，配合 Manifest 的 largeHeap）。
+                            SpatialLayers.dropPool()
+                        }
                     }
-                } finally {
-                    // ⑧ 分层池用完立刻还（2026-11-03，配合 Manifest 的 largeHeap）。
-                    // 池是 56n（1022×2268 ⇒ 130MB），生成完还常驻的话，主进程退到后台就成了
-                    // lmkd 的首选目标 —— 大堆本来就让它在同 adj 档位里更靠前。
-                    // 代价：下一次生成要多花几百毫秒重建池（分配 9 个数组 + 清零）。
-                    // 放在 finally 里 ⇒ 分层失败/抛异常也会还。
-                    SpatialLayers.dropPool()
+                    if (attempt.exceptionOrNull() is OutOfMemoryError) {
+                        SpatialDepth.dropPool()
+                        SpatialLayers.dropPool()
+                        System.gc()
+                        val next = SpatialDepth.SHORT_SIDES.lastOrNull { it < tier }
+                        if (next != null) {
+                            Log.w("SpatialWallpaper", "生成 OOM（短边 $tier）→ 降到 $next 重试")
+                            tier = next
+                            continue
+                        }
+                    }
+                    result = attempt
                 }
+                // 降级后让下拉栏反映实际生效的档位，别让界面骗人。
+                if (tier != shortSide) {
+                    Log.i("SpatialWallpaper", "实际分辨率 $tier（原选 $shortSide）")
+                    shortSide = tier
+                    prefs.setSpatialShortSide(tier)
+                }
+                result
             }
             busy = false
             outcome.fold(
