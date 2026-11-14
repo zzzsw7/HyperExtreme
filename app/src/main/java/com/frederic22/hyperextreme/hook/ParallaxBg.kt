@@ -344,6 +344,48 @@ internal object ParallaxBg {
     }
 
     /**
+     * **封面让位的边沿处理**（2026-11-13）。
+     *
+     * 视差链和三条 GL 渲染链不一样：它不是"按属性启动/停止"，而是**注入一个 View + 传感器**，
+     * 所以让位要做两件事：
+     *
+     * * 上升沿：`removeBackdrop` 把层拆掉、复位主体位移、停传感器（露出的就是系统壁纸 = 封面）；
+     * * 下降沿：重新 `ensureAsync` —— [applyState] 会自己解析锚点（`resolveBgLayer` / `subjectView`）
+     *   再 `insertIfNeeded`，所以不需要我们记住 anchor。
+     *
+     * 为什么用看门狗而不是挂在 `onViewAttached` 里：封面开关与"视图入窗"没有因果关系，
+     * 期间可能一次入窗都没有（锁屏静止），靠事件驱动会漏掉整个上升沿。
+     *
+     * Context 一律取 `HookRuntime.appContext()`（本进程自己的），不能取 `backdropRef` 的
+     * —— 上升沿拆完层之后那个引用就是 null 了，下降沿就没得可用。
+     */
+    /**
+     * 封面让位边沿（2026-11-13）。**由 YieldGate.onCoverChanged 直接调用**。
+     *
+     * 原来这里是一个独立线程每秒轮询 `YieldGate.coverOn`：常驻唤醒、且在低端机上会让
+     * 边沿最多晚 1 秒。现在闸门翻转当场回调，线程删掉。
+     */
+    fun onCoverChanged(on: Boolean) {
+        val ctx = HookRuntime.appContext() ?: return
+        if (on) {
+            mainHandler.post {
+                runCatching {
+                    removeBackdrop(ctx)
+                    resetSubjectShift(ctx)
+                    stopSensor()
+                }.onFailure { HookRuntime.log("视差壁纸效果：让位异常：$it") }
+            }
+            HookRuntime.log("视差壁纸效果：让位（封面模式）→ 移除背景层")
+        } else {
+            mainHandler.post {
+                runCatching { ensureAsync(ctx, "封面让位结束") }
+                    .onFailure { HookRuntime.log("视差壁纸效果：恢复异常：$it") }
+            }
+            HookRuntime.log("视差壁纸效果：让位结束 → 重新自愈")
+        }
+    }
+
+    /**
      * 挂 `View#onAttachedToWindow` 认两个目标视图。
      *
      * 与 LockScreenButton 的入窗 hook 是**两个独立 hook**，互不干扰（它的 `ready()` 短路只影响它自己）。
@@ -1290,6 +1332,17 @@ internal object ParallaxBg {
 
     /** **主线程**上的实际应用：按配置决定「显示背景层 + 位移」或「移除背景层 + 复位位移」。 */
     private fun applyState(context: Context, config: ParallaxConfig?, reason: String) {
+        // 封面让位中：任何"应用"都退化成拆除（幂等）。
+        // 这一条同时兜住"让位期间恰好有视图入窗 / 有指令进来"的情况 —— 否则 [onViewAttached]
+        // 会借自愈路径把层又插回去。真正的恢复由 [onCoverChanged] 的下降沿触发。
+        if (YieldGate.coverOn) {
+            runCatching {
+                removeBackdrop(context)
+                resetSubjectShift(context)
+                stopSensor()
+            }
+            return
+        }
         val active = config?.active == true
         if (active) {
             // v21a：锚点 = 背景层槽（仍在树里、空着）或主体任一 → 向上找窗口根 → 搬家插入。
@@ -1380,6 +1433,9 @@ internal object ParallaxBg {
      * remove + addView（搬运；调用方保证时机在"视觉无变化"的静止态）。成功后同步 [treeAnchored]。
      */
     private fun insertIfNeeded(anchor: View, treeSlot: ViewGroup? = null): View? {
+        // 封面让位中绝不插入。`applyState` 已经拦了一层，这里是兜底 ——
+        // 入窗自愈（onViewAttached）与指令路径都可能绕开 applyState 直接进来。
+        if (YieldGate.coverOn) return null
         val host: ViewGroup = treeSlot ?: windowRootOf(anchor) ?: return null
         val targetTree = treeSlot != null
         val existing = backdropRef?.get()
