@@ -316,6 +316,8 @@ internal object SpatialRenderer {
     private var uShadowLoc = 0
     private var uShadowALoc = 0
     private var uUvNudgeLoc = 0
+    /** 主体轮廓硬化宽度（iOS 模式；0 = 不处理）。 */
+    private var uAlphaCutLoc = 0
     private var layerCount = 0
     private var textures = IntArray(0)
 
@@ -446,7 +448,7 @@ internal object SpatialRenderer {
         val lw = layerW
         val lh = layerH
         if (w <= 0 || h <= 0 || lw <= 0 || lh <= 0) return null
-        val g = SpatialGlCore.geometry(w, h, lw, lh)
+        val g = SpatialGlCore.geometry(w, h, lw, lh, SpatialTuning.panRad)
         return floatArrayOf(g.kx, g.ky, g.spanX, g.spanY, w.toFloat(), h.toFloat())
     }
 
@@ -1386,6 +1388,7 @@ internal object SpatialRenderer {
         uShadowLoc = GLES20.glGetUniformLocation(program, "uShadow")
         uShadowALoc = GLES20.glGetUniformLocation(program, "uShadowA")
         uUvNudgeLoc = GLES20.glGetUniformLocation(program, "uUvNudge")
+        uAlphaCutLoc = GLES20.glGetUniformLocation(program, "uAlphaCut")
 
         // 位置 + UV：Bitmap 第 0 行在顶部，而 GL 的 (0,0) 在左下 ⇒ UV 的 y 要反过来
         val verts = floatArrayOf(
@@ -2440,7 +2443,7 @@ internal object SpatialRenderer {
         // 球面参数：屏幕 + 层图尺寸 → uK / uSpan。算法与 AGSL 主体、系统壁纸服务链
         // **同一份**（[SpatialGlCore.geometry]）：cover + 安全区，两向同乘一个倍数
         // ⇒ spanX/spanY 恒等于 imgAspect，不会把图拉长（2026-10-24 修）。
-        val g = SpatialGlCore.geometry(screenW, screenH, layerW, layerH)
+        val g = SpatialGlCore.geometry(screenW, screenH, layerW, layerH, SpatialTuning.panRad)
         GLES20.glUniform2f(uK, g.kx, g.ky)
         GLES20.glUniform2f(uSpan, g.spanX, g.spanY)
         // 显示区域（2026-11-04）：uv' = uv * scale + offset，深度场与颜色共用。
@@ -2515,6 +2518,11 @@ internal object SpatialRenderer {
             }
             // 第 0 层（背景）强制不透明，保证任何位置都有实底
             GLES20.glUniform1f(uOpaque, if (i == 0) 1f else 0f)
+            // 主体轮廓硬化：iOS 模式下把分层时那圈软过渡收成 ~1px（"果冻边"的来源）
+            GLES20.glUniform1f(
+                uAlphaCutLoc,
+                if (ios && i > 0) SpatialTuning.IOS_ALPHA_CUT else 0f,
+            )
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textures[i])
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         }
