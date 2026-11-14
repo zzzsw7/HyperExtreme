@@ -80,8 +80,8 @@ internal object SpatialOverlay {
         uniform float2 uSpan;
         uniform float2 uShift;
         // 幅度补偿（与 SpatialGlCore.FRAG 同一套）：>2.6° 时压缩深度对比度，防内容回折。
-        uniform float uKScale;
-        uniform float uKMid;
+        uniform float uFlatK;
+        uniform float uFlatAmt;
         uniform float uDkTh;
         uniform float uDim;
         // 显示区域（2026-11-05）：uv' = uv * uUvScale + uUvOffset。
@@ -119,7 +119,7 @@ internal object SpatialOverlay {
             float g = 1.0 - clamp(abs(kb - kf) / max(uDkTh, 0.001), 0.0, 1.0);
             float k = clamp(mix(kf, kb, g), 0.0, 1.0);
             // 幅度补偿：梯度项恒定 ⇒ 大幅只"走得更远"，不再摊开（见 SpatialTuning.kScale）
-            k = uKMid + (k - uKMid) * uKScale;
+            k = mix(k, uFlatK, uFlatAmt);
 
             float2 q = q0 - uShift * k;
             float2 uv = float2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
@@ -662,8 +662,8 @@ internal object SpatialOverlay {
                 // 这里自己再算一遍迟早漂移 —— 一律走它，主体才跟得住背景。
                 val shift = SpatialRenderer.currentShift(g[2], g[3])
                 s.setFloatUniform("uShift", shift[0], shift[1])
-                s.setFloatUniform("uKScale", SpatialTuning.kScale(SpatialTuning.panRad))
-                s.setFloatUniform("uKMid", SpatialTuning.K_MID)
+                s.setFloatUniform("uFlatK", SpatialTuning.FLAT_K)
+                s.setFloatUniform("uFlatAmt", SpatialTuning.flattenFor(SpatialTuning.panRad))
                 s.setFloatUniform("uDkTh", SpatialRenderer.dkThreshold())
                 // AOD 压暗：与 GL 同一份值（GL 走 setColor、这里走 shader）
                 s.setFloatUniform("uDim", SpatialRenderer.aodDimValue())
