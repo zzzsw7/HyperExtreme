@@ -7,6 +7,7 @@ import com.frederic22.hyperextreme.data.MaskPrefs
 import com.frederic22.hyperextreme.data.SpatialFlag
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -103,7 +104,10 @@ internal object SpatialForegroundHider {
             com.frederic22.hyperextreme.data.AliveFlag.PROP_DEPTH,
         ).trim() == "1"
         aliveDepthOn = aliveDepth
-        val v = spatialOn || rasterOn || aliveActive
+        // 封面让位期间必须放开这一层：HyperMusicCover 在封面模式下自己管主体的显隐，
+        // 我们再把它压成 GONE 会和它的状态机打架（退出封面后主体可能回不来）。
+        // 让位时三个渲染器都已停，系统壁纸（=封面）本身就在显示，这一层留着也无事。
+        val v = !YieldGate.coverOn && (spatialOn || rasterOn || aliveActive)
         if (v != cacheValue) {
             log(
                 "开关 -> $v（空间=$spatialOn[$active/$scope] 光栅=$rasterOn[$rasterActive/$rasterScope] " +
@@ -133,6 +137,8 @@ internal object SpatialForegroundHider {
             module.hook(method).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val result = chain.proceed()
+                    // 记下 panel 实例：封面让位结束时要主动再收口一次（见 [enforce]）。
+                    panelRef = WeakReference(chain.getThisObject())
                     // **必须在 proceed 之后**：系统刚把 visibility 算完，我们才盖得住。
                     // 闸门之前先收口：属性 active=0（关闭替换）时 [handle] 根本不会进，
                     // 不清的话我们建的 View 会一直留在前景层里（2026-10-29 问题 1）。
@@ -208,26 +214,52 @@ internal object SpatialForegroundHider {
             return
         }
         AliveOverlay.onDisabled()
-        val view = layer as View
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            view.visibility = View.INVISIBLE
-            logOnce()
-        } else {
-            mainHandler.post {
-                runCatching {
-                    if (view.visibility == View.VISIBLE) {
-                        view.visibility = View.INVISIBLE
-                        logOnce()
-                    }
-                }
-            }
-        }
+        // **绝不整层隐藏**（2026-11-13 真机问题）：HyperMusicCover 的歌词就挂在这一层里，
+        // 整层 INVISIBLE 会把歌词一起干掉 —— 表现为「锁屏进封面时背景对、歌词不出现」，
+        // 而且只有再进一次封面（HMC 重建歌词）才恢复。
+        // 这里只把系统那张景深主体摘掉，层本身保持原状（它管着模糊、解锁退场等）。
+        runCatching { SpatialOverlay.detachSystemSubject(layer) }
+        logOnce()
     }
 
     private fun logOnce() {
         if (logged.putIfAbsent("hidden", true) == null) {
             log("锁屏景深关：景深前景层已撤（keyguard_foreground_layer → INVISIBLE）")
         }
+    }
+
+    /** 最近的 panel 实例（弱引用，避免跨 keyguard 重建时泄漏）。 */
+    @Volatile
+    private var panelRef: java.lang.ref.WeakReference<Any>? = null
+
+    /**
+     * **强制再收口一次**（2026-11-13，封面让位用）。
+     *
+     * ⚠️ 只做**最外科**的一步：把系统那个 `deducted_image_view`（景深主体）从父容器里摘掉，
+     * **绝不碰整层 visibility**。
+     *
+     * 原因（2026-11-13 真机踩到）：锁屏景深关闭时 [handle] 走"旧链"，把
+     * `keyguard_foreground_layer` 整层设成 INVISIBLE；而 HyperMusicCover 的**锁屏歌词就挂在这一层里**
+     * —— 一压就全没了（现象：封面正常但歌词整块消失）。
+     * 我们真正要治的只是"让位结束后系统主体又浮回来、和我们的主体叠成两份"，
+     * 摘掉那一个 ImageView 就够，层本身留着给别人的 View 用。
+     */
+    fun enforce(reason: String) {
+        val self = panelRef?.get() ?: return
+        val run = Runnable {
+            if (!enabled()) return@Runnable
+            runCatching {
+                val field = self.javaClass.getDeclaredField(FIELD_FOREGROUND).apply { isAccessible = true }
+                val layer = field.get(self) as? android.view.ViewGroup ?: return@Runnable
+                if (layer.visibility != View.VISIBLE) return@Runnable
+                SpatialOverlay.detachSystemSubject(layer)
+            }.onFailure {
+                log("强制收口失败（$reason）：${it.javaClass.simpleName}: ${it.message}")
+            }
+        }
+        mainHandler.post(run)
+        mainHandler.postDelayed(run, 700L)
+        log("封面让位结束 → 摘除系统景深主体（$reason）")
     }
 
     /**
