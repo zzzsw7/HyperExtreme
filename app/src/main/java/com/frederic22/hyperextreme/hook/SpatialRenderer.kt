@@ -318,6 +318,9 @@ internal object SpatialRenderer {
     private var uUvNudgeLoc = 0
     /** 主体轮廓硬化宽度（iOS 模式；0 = 不处理）。 */
     private var uAlphaCutLoc = 0
+    /** 幅度补偿：深度对比度系数 / 枢轴（见 SpatialTuning.kScale）。 */
+    private var uKScaleLoc = 0
+    private var uKMidLoc = 0
     private var layerCount = 0
     private var textures = IntArray(0)
 
@@ -1389,6 +1392,8 @@ internal object SpatialRenderer {
         uShadowALoc = GLES20.glGetUniformLocation(program, "uShadowA")
         uUvNudgeLoc = GLES20.glGetUniformLocation(program, "uUvNudge")
         uAlphaCutLoc = GLES20.glGetUniformLocation(program, "uAlphaCut")
+        uKScaleLoc = GLES20.glGetUniformLocation(program, "uKScale")
+        uKMidLoc = GLES20.glGetUniformLocation(program, "uKMid")
 
         // 位置 + UV：Bitmap 第 0 行在顶部，而 GL 的 (0,0) 在左下 ⇒ UV 的 y 要反过来
         val verts = floatArrayOf(
@@ -2463,6 +2468,9 @@ internal object SpatialRenderer {
 
         // 选择性融合的阈值（主体层用；背景层不读这个 uniform）
         GLES20.glUniform1f(uDkTh, SpatialTuning.dkTh)
+        // 幅度补偿：幅度 >2.6° 时压缩深度对比度，避免梯度项变负（内容回折 = 软变形）
+        GLES20.glUniform1f(uKScaleLoc, SpatialTuning.kScale(SpatialTuning.panRad))
+        GLES20.glUniform1f(uKMidLoc, SpatialTuning.K_MID)
 
         // AOD 压暗：只乘 RGB（压暗 ≠ 变透明）。GL 线程读 [aodDim]，改值时靠 requestDraw 重绘。
         GLES20.glUniform1f(uDimLoc, aodDim.coerceIn(0f, 1f))
