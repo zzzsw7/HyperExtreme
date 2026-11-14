@@ -101,6 +101,8 @@ object SpatialFlag {
         scope: Int,
         lockDepth: Boolean,
         crop: String = "",
+        panDeg: Float = 10f,
+        dkTh: Float = 0.08f,
     ) {
         Thread {
             val script = "setprop $PROP_ACTIVE 0; " +
@@ -109,7 +111,9 @@ object SpatialFlag {
                 "setprop $PROP_KEY ${key.orEmpty()}; " +
                 "setprop $PROP_SCOPE $scope; " +
                 "setprop $PROP_LOCKDEPTH ${if (lockDepth) 1 else 0}; " +
-                "setprop $PROP_CROP ${crop.trim()}"
+                "setprop $PROP_CROP ${crop.trim()}; " +
+                "setprop $PROP_PAN_DEG $panDeg; " +
+                "setprop $PROP_DK $dkTh"
             val r = runCatching { RootShell.run(script) }.getOrNull()
             if (r == null || !r.ok) {
                 android.util.Log.w(
@@ -129,6 +133,24 @@ object SpatialFlag {
      */
     const val PROP_CROP = "debug.hyperextreme.spatial_crop"
 
+    /**
+     * 「位移幅度」满量程角（**度**，4..20，默认 10）。
+     *
+     * 渲染侧把它换算成 `PAN_RAD`（弧度）用进 `uShift = nx · PAN_RAD / span`。
+     * 调小 ⇒ 主体与背景的相对位移变小，轮廓处的撕裂带同比变窄 —— 这是
+     * 「形变感」最直接的旋钮。2026-11-14 由编译期常量改成运行时可调。
+     */
+    const val PROP_PAN_DEG = "debug.hyperextreme.spatial_pan_deg"
+
+    /**
+     * 「边缘融合」阈值（0.02..0.30，默认 0.08）—— 对应 shader 的 `uDkTh`。
+     *
+     * 主体与背景之间是真实深度断崖：`|Δk| < uDkTh` 的区域才把两层深度混合，
+     * 让 mask 多带的那圈背景跟随背景走。调大 ⇒ 融合带更宽、边缘更"软"，
+     * 撕裂感下降但立体感略弱。
+     */
+    const val PROP_DK = "debug.hyperextreme.spatial_dk"
+
     /** 异步写属性；root 不可用时静默失败（界面上的开关状态仍然正确，只是不生效）。 */
     fun push(
         active: Boolean,
@@ -136,6 +158,8 @@ object SpatialFlag {
         scope: Int,
         lockDepth: Boolean,
         crop: String = "",
+        panDeg: Float = 10f,
+        dkTh: Float = 0.08f,
     ) {
         Thread {
             val r = runCatching {
@@ -144,7 +168,9 @@ object SpatialFlag {
                         "setprop $PROP_KEY ${key.orEmpty()}; " +
                         "setprop $PROP_SCOPE $scope; " +
                         "setprop $PROP_LOCKDEPTH ${if (lockDepth) 1 else 0}; " +
-                        "setprop $PROP_CROP ${crop.trim()}",
+                        "setprop $PROP_CROP ${crop.trim()}; " +
+                        "setprop $PROP_PAN_DEG $panDeg; " +
+                        "setprop $PROP_DK $dkTh",
                 )
             }.getOrNull()
             if (r == null || !r.ok) {
