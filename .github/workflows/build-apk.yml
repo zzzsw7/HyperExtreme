@@ -1,0 +1,98 @@
+name: Build APK
+
+# HyperExtreme 的 fork 构建：编译 release APK 并上传 Artifacts。
+#
+# 与上游的区别只在构建环境：这里显式装 platform 37 / build-tools 37.0.0 / NDK / CMake
+# （模块里有 patchmatch 的 native 代码），并用仓库自带的 ci/debug.keystore 签名，
+# 这样每次 CI 构建签名一致，也能直接覆盖安装手机上已有的同签名版本。
+#
+# 版本号：900000 + 运行序号，保证递增、可覆盖安装。
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # 不用 android-actions/setup-android：它在非交互环境里会卡在 SDK 许可确认。
+      - name: Android SDK / NDK / CMake
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          SDKM="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"
+          echo "sdkmanager=$SDKM"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          yes | "$SDKM" --install \
+            "platform-tools" \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1" > /dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-he-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          restore-keys: gradle-he-${{ runner.os }}-
+
+      # build.gradle.kts 从仓库根的 keystore.properties 读签名；这里用仓库自带的 debug key 生成一份。
+      - name: Signing config
+        run: |
+          cat > keystore.properties <<'EOF'
+          storeFile=ci/debug.keystore
+          storePassword=android
+          keyAlias=androiddebugkey
+          keyPassword=android
+          EOF
+
+      - name: Build release
+        env:
+          MC_CODE: ${{ github.run_number }}
+        run: |
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -PheVersionCode=$((900000 + MC_CODE)) \
+            -PheVersionName="ci.$MC_CODE"
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          find app/build/outputs/apk/release -name '*.apk' -exec cp {} out/ \;
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HyperExtreme-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          {
+            echo "### 构建产物"
+            echo ""
+            echo "| 文件 | 大小 |"
+            echo "|---|---|"
+            for f in out/*.apk; do echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"; done
+          } >> "$GITHUB_STEP_SUMMARY"
