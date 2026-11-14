@@ -132,6 +132,8 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
     // 都是**拖动即生效** —— 渲染器每帧读属性（500ms 缓存），不需要重新应用壁纸。
     var panDeg by remember { mutableFloatStateOf(prefs.spatialPanDeg) }
     var edgeFusion by remember { mutableFloatStateOf(prefs.spatialEdgeFusion) }
+    // 「iOS 立体感」（2026-11-14）：主体刚性 + 背景慢跟随 + 主体投影。
+    var iosMode by remember { mutableStateOf(prefs.spatialIosMode) }
 
     /** 把当前两个调参值推给渲染器（生效中才有意义）。 */
     fun pushTuning() {
@@ -145,6 +147,7 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
             SpatialCrop.encodeProp(SpatialCrop.read(ctx, key)),
             panDeg,
             edgeFusion,
+            iosMode,
         )
     }
 
@@ -301,6 +304,7 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 cropProp,
                 prefs.spatialPanDeg,
                 prefs.spatialEdgeFusion,
+                prefs.spatialIosMode,
             )
         } else {
             com.frederic22.hyperextreme.data.SpatialFlag.push(
@@ -311,6 +315,7 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 cropProp,
                 prefs.spatialPanDeg,
                 prefs.spatialEdgeFusion,
+                prefs.spatialIosMode,
             )
         }
         prefs.setSpatialAppliedCrop(key, cropStamp)
@@ -865,12 +870,15 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 },
             )
             // 「位移幅度」：主体与背景的相对位移。调小 ⇒ 轮廓撕裂带变窄，形变感下降。
+            // 2026-11-14 晚：量程改成 0.5°–4°、默认 1.4°（= 老的编译期常量 1.394°），
+            // 步进 0.5°，所以数值显示带一位小数 —— 原来的 4°–20°/整度是**放大 7 倍**的错标定；
+            // 4° 封顶是几何硬限（见 MaskPrefs.SPATIAL_PAN_DEG_MAX 的注释）。
             ParallaxSliderRow(
                 title = "位移幅度",
-                text = "${panDeg.roundToInt()}°",
+                text = String.format(java.util.Locale.US, "%.1f°", panDeg),
                 value = panDeg,
                 range = MaskPrefs.SPATIAL_PAN_DEG_MIN..MaskPrefs.SPATIAL_PAN_DEG_MAX,
-                steps = sliderSteps(MaskPrefs.SPATIAL_PAN_DEG_MIN..MaskPrefs.SPATIAL_PAN_DEG_MAX),
+                steps = 6,   // 0.5..4，每 0.5 一档 ⇒ 8 个值 / 6 个中间档
                 onValueChange = { panDeg = it },
                 onFinished = {
                     prefs.setSpatialPanDeg(panDeg)
@@ -887,6 +895,18 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 onValueChange = { edgeFusion = it },
                 onFinished = {
                     prefs.setSpatialEdgeFusion(edgeFusion)
+                    pushTuning()
+                },
+            )
+            // 「iOS 立体感」（2026-11-14）：主体整块移动、背景慢跟随、主体带投影。
+            // 关 = 原来的两层逐像素位移，可以来回切换对比。
+            SwitchRow(
+                title = "iOS 立体感",
+                summary = "主体整块移动、背景轻微跟随，主体下方带一层投影",
+                checked = iosMode,
+                onCheckedChange = {
+                    iosMode = it
+                    prefs.setSpatialIosMode(it)
                     pushTuning()
                 },
             )
