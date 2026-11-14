@@ -54,7 +54,17 @@ object SpatialControl {
         // 壁纸基准随关闭一起清 —— 下次开启时重新记（与视差同款语义）。
         prefs.setSpatialWallpaperFp("")
         // SystemUI 侧读的是系统属性，prefs 通道在那里不可用。
-        SpatialFlag.push(false, null, prefs.spatialScope, prefs.spatialLockDepth)
+        // 调参值也要带上（2026-11-14）：漏传会走 `push` 的默认值 10°/0.08 ⇒ 关一次壁纸
+        // 就把用户调好的幅度/融合打回默认，下次开启前界面与实际渲染对不上。
+        SpatialFlag.push(
+            false,
+            null,
+            prefs.spatialScope,
+            prefs.spatialLockDepth,
+            "",
+            prefs.spatialPanDeg,
+            prefs.spatialEdgeFusion,
+        )
         restartWallpaperService()
         // Toast 需要 Looper：binder 线程直接弹会抛
         // "Can't create handler inside thread that has not called Looper.prepare()"。
