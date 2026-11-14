@@ -73,6 +73,31 @@ internal object SpatialTuning {
      */
     const val IOS_ALPHA_CUT = 0.06f
 
+    /**
+     * **幅度补偿**（2026-11-14 晚）：深度场的对比度压缩枢轴。
+     *
+     * 生成侧 k 的区间是 `[K_MIN, K_MIN+(1−K_MIN)·WARP_GAIN] = [0.15, 0.6175]`，枢轴取中值附近。
+     * 压缩公式 `k' = mid + (k − mid)·scale` ⇒ 幅度拉大时所有深度一起平移、相对差不变。
+     */
+    const val K_MID = 0.4f
+
+    /**
+     * **梯度安全的幅度上限**（度）。
+     *
+     * 生成侧按 1.394° 标定：`1 − PAN_UV·∂k/∂u ≥ 0.5`（局部最多放大 2×）。
+     * 渲染幅度按比例放大这个梯度项 ⇒ `1 − 0.5·(pan/1.394°)` **超过 2.79° 就为负 = 内容回折**
+     * （画面软变形/糊的真因）。取 2.6° 留余量：幅度 ≤ 2.6° 时补偿不生效（行为完全不变），
+     * 更大时按 `2.6°/pan` 压缩深度对比度。
+     */
+    private const val PAN_GRADIENT_SAFE_DEG = 2.6f
+
+    /** 当前幅度对应的 k 对比度系数（≤1 = 需要压缩；1 = 恒等）。 */
+    fun kScale(panRad: Float): Float {
+        val safe = Math.toRadians(PAN_GRADIENT_SAFE_DEG.toDouble()).toFloat()
+        if (panRad <= safe) return 1f
+        return safe / panRad
+    }
+
     private var readAt = 0L
 
     /**
