@@ -86,9 +86,12 @@ internal object SpatialTuning {
      */
     const val FLAT_K = 0.25f
 
-    /** 抹平起点/终点（度）：≤2° 完全保持逐像素行为；≥4° 背景成为一块平板。 */
-    private const val PAN_FLATTEN_START_DEG = 2.0f
-    private const val PAN_FLATTEN_FULL_DEG = 4.0f
+    /**
+     * 抹平起点/终点（度）：**≤4° 完全保持逐像素行为**（3–4° 的视差一点不损失，这是用户
+     * 2026-11-14 明确要求的），4°→7° 渐入，≥7° 背景成为一块平板。
+     */
+    private const val PAN_FLATTEN_START_DEG = 4.0f
+    private const val PAN_FLATTEN_FULL_DEG = 7.0f
 
     /** 当前幅度的抹平系数（0 = 原样，1 = 平板）。smoothstep，避免拖动时观感突变。 */
     fun flattenFor(panRad: Float): Float {
