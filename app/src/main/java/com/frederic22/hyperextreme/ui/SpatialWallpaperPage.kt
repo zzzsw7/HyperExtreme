@@ -41,6 +41,7 @@ import com.frederic22.hyperextreme.hook.SpatialGlCore
 import com.frederic22.hyperextreme.data.SpatialControl
 import com.frederic22.hyperextreme.data.RunLog
 import com.frederic22.hyperextreme.spatial.SpatialCrop
+import kotlin.math.roundToInt
 import com.frederic22.hyperextreme.spatial.SpatialDepth
 import com.frederic22.hyperextreme.spatial.SpatialLayers
 import com.frederic22.hyperextreme.wallpaper.DynamicWallpaperPermission
@@ -126,6 +127,26 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
     // 「启用空间壁纸锁屏景深」（2026-10-29）：默认关；关时渲染逻辑与加它之前完全一致。
     // 生效时机与上面的「生效范围」一样 —— 生效中改只记下来，下一次替换才随属性一起推。
     var lockDepthChoice by remember { mutableStateOf(prefs.spatialLockDepth) }
+
+    // 「位移幅度」（度）与「边缘融合」（阈值）：2026-11-14 从编译期常量改成可调。
+    // 都是**拖动即生效** —— 渲染器每帧读属性（500ms 缓存），不需要重新应用壁纸。
+    var panDeg by remember { mutableFloatStateOf(prefs.spatialPanDeg) }
+    var edgeFusion by remember { mutableFloatStateOf(prefs.spatialEdgeFusion) }
+
+    /** 把当前两个调参值推给渲染器（生效中才有意义）。 */
+    fun pushTuning() {
+        val key = prefs.spatialKey
+        if (!prefs.spatialActive || key.isEmpty()) return
+        com.frederic22.hyperextreme.data.SpatialFlag.push(
+            true,
+            key,
+            prefs.spatialScope,
+            prefs.spatialLockDepth,
+            SpatialCrop.encodeProp(SpatialCrop.read(ctx, key)),
+            panDeg,
+            edgeFusion,
+        )
+    }
 
     // 缓存二次确认：命中缓存后记下「哪个哈希 + 窗口截止时间」，10s 内再点才覆盖重算。
     var confirmKey by remember { mutableStateOf<String?>(null) }
@@ -278,6 +299,8 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 prefs.spatialScope,
                 prefs.spatialLockDepth,
                 cropProp,
+                prefs.spatialPanDeg,
+                prefs.spatialEdgeFusion,
             )
         } else {
             com.frederic22.hyperextreme.data.SpatialFlag.push(
@@ -286,6 +309,8 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 prefs.spatialScope,
                 prefs.spatialLockDepth,
                 cropProp,
+                prefs.spatialPanDeg,
+                prefs.spatialEdgeFusion,
             )
         }
         prefs.setSpatialAppliedCrop(key, cropStamp)
@@ -837,6 +862,32 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                     val value = SpatialDepth.SHORT_SIDES[index]
                     shortSide = value
                     prefs.setSpatialShortSide(value)
+                },
+            )
+            // 「位移幅度」：主体与背景的相对位移。调小 ⇒ 轮廓撕裂带变窄，形变感下降。
+            ParallaxSliderRow(
+                title = "位移幅度",
+                text = "${panDeg.roundToInt()}°",
+                value = panDeg,
+                range = MaskPrefs.SPATIAL_PAN_DEG_MIN..MaskPrefs.SPATIAL_PAN_DEG_MAX,
+                steps = sliderSteps(MaskPrefs.SPATIAL_PAN_DEG_MIN..MaskPrefs.SPATIAL_PAN_DEG_MAX),
+                onValueChange = { panDeg = it },
+                onFinished = {
+                    prefs.setSpatialPanDeg(panDeg)
+                    pushTuning()
+                },
+            )
+            // 「边缘融合」：调大 ⇒ 轮廓过渡更软、撕裂感更弱，但立体感略降。
+            ParallaxSliderRow(
+                title = "边缘融合",
+                text = String.format(java.util.Locale.US, "%.2f", edgeFusion),
+                value = edgeFusion,
+                range = MaskPrefs.SPATIAL_DK_MIN..MaskPrefs.SPATIAL_DK_MAX,
+                steps = 13,
+                onValueChange = { edgeFusion = it },
+                onFinished = {
+                    prefs.setSpatialEdgeFusion(edgeFusion)
+                    pushTuning()
                 },
             )
             // 「空间壁纸生效范围」（2026-10-28 用户要求，**排在「清除所有深度缓存」上面**）：
