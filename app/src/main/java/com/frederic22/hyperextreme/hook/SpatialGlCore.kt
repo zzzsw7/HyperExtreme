@@ -111,6 +111,11 @@ internal object SpatialGlCore {
         uniform float uDepthCh;     // 0 = 背景场(.r)，1 = 主体场(.a)
         uniform float uDkTh;        // 选择性融合的深度差阈值（|Δk|）
         uniform float uDim;         // AOD 压暗系数（1 = 原亮度，0 = 全黑）
+        // 「iOS 立体感」的主体投影（2026-11-14）：把主体层的 alpha 当作遮罩，
+        // 出一张纯黑的半透明图，压在背景之上、主体之下 —— 立体感主要来自这一层。
+        uniform float uShadow;      // 1 = 这一遍画的是投影（只输出黑色 + alpha）
+        uniform float uShadowA;     // 投影不透明度
+        uniform vec2 uUvNudge;      // 投影相对主体的固定偏移（光从左上来 ⇒ 影子往右下）
         // 显示区域（2026-11-04）：uv' = uv * uUvScale + uUvOffset
         // scale = 1/zoom，offset = c − 0.5/zoom（见 `SpatialCrop`）。
         // ⚠️ 深度场与颜色**必须用同一套变换**，否则位移场和图像错位、主体会飘。
@@ -145,6 +150,13 @@ internal object SpatialGlCore {
             uv = uv * uUvScale + uUvOffset;
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                 gl_FragColor = vec4(0.0);
+                return;
+            }
+            // 主体投影这一遍：纹理绑的是「主体 alpha 的低分辨率模糊图」，只取 alpha。
+            // 输出预乘黑（RGB=0, A=遮罩×强度），配合 GL_ONE/ONE_MINUS_SRC_ALPHA 直接压暗背景。
+            if (uShadow > 0.5) {
+                float sa = texture2D(uTex, clamp(uv + uUvNudge, vec2(0.0), vec2(1.0))).a;
+                gl_FragColor = vec4(0.0, 0.0, 0.0, sa * uShadowA * uDim);
                 return;
             }
             vec4 c = texture2D(uTex, uv);
