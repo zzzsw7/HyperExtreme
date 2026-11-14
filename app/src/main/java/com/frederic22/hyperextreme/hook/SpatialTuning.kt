@@ -66,6 +66,18 @@ internal object SpatialTuning {
 
     private var readAt = 0L
 
+    /**
+     * 属性值每变一次就 +1。[com.frederic22.hyperextreme.hook.RendererPollers] 的轮询线程
+     * 靠它判断「调参变了」→ 强制重绘一帧。
+     *
+     * **为什么需要**：渲染器只在**姿态变化**时重绘。手机放在桌上不动时，拖滑块 / 拨开关
+     * 属性虽然变了，但画面不刷 ⇒ 看起来像"没生效"，直到你转一下手机。有了这个计数，
+     * 轮询一发现值变就 requestDraw，观感才是真正的"即时生效"。
+     */
+    @Volatile
+    var revision: Int = 0
+        private set
+
     /** 每帧调用，内部 500ms 缓存。属性缺失/非法 ⇒ 回到默认值。 */
     fun refresh() {
         val now = SystemClock.elapsedRealtime()
@@ -74,12 +86,15 @@ internal object SpatialTuning {
 
         val deg = HookRuntime.systemProperty(SpatialFlag.PROP_PAN_DEG).trim()
             .toFloatOrNull()?.coerceIn(PAN_DEG_MIN, PAN_DEG_MAX) ?: PAN_DEG_DEFAULT
-        panRad = Math.toRadians(deg.toDouble()).toFloat()
-
-        dkTh = HookRuntime.systemProperty(SpatialFlag.PROP_DK).trim()
+        val newPan = Math.toRadians(deg.toDouble()).toFloat()
+        val newDk = HookRuntime.systemProperty(SpatialFlag.PROP_DK).trim()
             .toFloatOrNull()?.coerceIn(DK_MIN, DK_MAX) ?: DK_DEFAULT
+        val newIos = HookRuntime.systemProperty(SpatialFlag.PROP_IOS).trim() == "1"
 
-        iosMode = HookRuntime.systemProperty(SpatialFlag.PROP_IOS).trim() == "1"
+        if (newPan != panRad || newDk != dkTh || newIos != iosMode) revision++
+        panRad = newPan
+        dkTh = newDk
+        iosMode = newIos
     }
 
     /** 调试用：当前生效值（度 / 阈值 / 模式），日志里打一行就能对照 UI。 */
