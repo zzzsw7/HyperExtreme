@@ -101,8 +101,9 @@ object SpatialFlag {
         scope: Int,
         lockDepth: Boolean,
         crop: String = "",
-        panDeg: Float = 10f,
+        panDeg: Float = 1.4f,
         dkTh: Float = 0.08f,
+        iosMode: Boolean = false,
     ) {
         Thread {
             val script = "setprop $PROP_ACTIVE 0; " +
@@ -113,7 +114,8 @@ object SpatialFlag {
                 "setprop $PROP_LOCKDEPTH ${if (lockDepth) 1 else 0}; " +
                 "setprop $PROP_CROP ${crop.trim()}; " +
                 "setprop $PROP_PAN_DEG $panDeg; " +
-                "setprop $PROP_DK $dkTh"
+                "setprop $PROP_DK $dkTh; " +
+                "setprop $PROP_IOS ${if (iosMode) 1 else 0}"
             val r = runCatching { RootShell.run(script) }.getOrNull()
             if (r == null || !r.ok) {
                 android.util.Log.w(
@@ -151,6 +153,14 @@ object SpatialFlag {
      */
     const val PROP_DK = "debug.hyperextreme.spatial_dk"
 
+    /**
+     * 「iOS 立体感」（`1` = 开，`0`/空 = 关，2026-11-14）。
+     *
+     * 开 = 主体层刚性平移 + 背景 0.35 倍跟随 + 主体投影；关 = 两层都逐像素位移（旧行为）。
+     * 由 [com.frederic22.hyperextreme.hook.SpatialTuning] 500ms 缓存读取，**拖动即生效**。
+     */
+    const val PROP_IOS = "debug.hyperextreme.spatial_ios"
+
     /** 异步写属性；root 不可用时静默失败（界面上的开关状态仍然正确，只是不生效）。 */
     fun push(
         active: Boolean,
@@ -158,8 +168,9 @@ object SpatialFlag {
         scope: Int,
         lockDepth: Boolean,
         crop: String = "",
-        panDeg: Float = 10f,
+        panDeg: Float = 1.4f,
         dkTh: Float = 0.08f,
+        iosMode: Boolean = false,
     ) {
         Thread {
             val r = runCatching {
@@ -170,7 +181,8 @@ object SpatialFlag {
                         "setprop $PROP_LOCKDEPTH ${if (lockDepth) 1 else 0}; " +
                         "setprop $PROP_CROP ${crop.trim()}; " +
                         "setprop $PROP_PAN_DEG $panDeg; " +
-                        "setprop $PROP_DK $dkTh",
+                        "setprop $PROP_DK $dkTh; " +
+                        "setprop $PROP_IOS ${if (iosMode) 1 else 0}",
                 )
             }.getOrNull()
             if (r == null || !r.ok) {
