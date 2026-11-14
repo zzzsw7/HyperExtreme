@@ -64,6 +64,7 @@ object SpatialControl {
             "",
             prefs.spatialPanDeg,
             prefs.spatialEdgeFusion,
+            prefs.spatialIosMode,
         )
         restartWallpaperService()
         // Toast 需要 Looper：binder 线程直接弹会抛
