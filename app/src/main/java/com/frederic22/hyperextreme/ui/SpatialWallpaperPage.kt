@@ -571,7 +571,9 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
             if (cr.cx == 0.5f && cr.cy == 0.5f && cr.zoom == 1f) return null
             val lw = 1000
             val lh = (1000f / c.aspect.coerceAtLeast(0.01f)).toInt().coerceAtLeast(1)
-            val g = SpatialGlCore.geometry(screen.width, screen.height, lw, lh)
+            // 位移幅度一起传：几何边距随幅度抬，卡片上的裁剪框才能和实际显示对上。
+            val panRad = Math.toRadians(prefs.spatialPanDeg.toDouble()).toFloat()
+            val g = SpatialGlCore.geometry(screen.width, screen.height, lw, lh, panRad)
             val halfW = g.visibleHalfX / cr.zoom
             val halfH = g.visibleHalfY / cr.zoom
             return RectF(cr.cx - halfW, cr.cy - halfH, cr.cx + halfW, cr.cy + halfH)
@@ -870,15 +872,14 @@ internal fun SpatialWallpaperDetail(state: MaskUiState) {
                 },
             )
             // 「位移幅度」：主体与背景的相对位移。调小 ⇒ 轮廓撕裂带变窄，形变感下降。
-            // 2026-11-14 晚：量程改成 0.5°–4°、默认 1.4°（= 老的编译期常量 1.394°），
-            // 步进 0.5°，所以数值显示带一位小数 —— 原来的 4°–20°/整度是**放大 7 倍**的错标定；
-            // 4° 封顶是几何硬限（见 MaskPrefs.SPATIAL_PAN_DEG_MAX 的注释）。
+            // 2026-11-14 晚（用户定）：量程 **0.1°–10°、步进 0.1°**，默认 1.4°（= 老编译期常量 1.394°）。
+            // 大角度不再有硬限 —— 几何安全边距会跟着幅度抬（画面会略微放大）。
             ParallaxSliderRow(
                 title = "位移幅度",
                 text = String.format(java.util.Locale.US, "%.1f°", panDeg),
                 value = panDeg,
                 range = MaskPrefs.SPATIAL_PAN_DEG_MIN..MaskPrefs.SPATIAL_PAN_DEG_MAX,
-                steps = 6,   // 0.5..4，每 0.5 一档 ⇒ 8 个值 / 6 个中间档
+                steps = 98,   // 0.1..10，每 0.1 一档 ⇒ 100 个值 / 98 个中间档
                 onValueChange = { panDeg = it },
                 onFinished = {
                     prefs.setSpatialPanDeg(panDeg)
