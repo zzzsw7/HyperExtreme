@@ -125,14 +125,15 @@ internal object SpatialGlCore {
         // iOS 的抠像是硬的（1px 反锯齿），柔和感由投影提供 ⇒ 这里把 alpha 重新做一次
         // smoothstep 硬化：0 = 不处理，0.06 = 在 alpha 0.44..0.56 之间过渡（约 1px）。
         uniform float uAlphaCut;
-        // **幅度补偿**（2026-11-14 晚）：深度场是按 1.394° 标定的（生成侧 Lipschitz 限幅
-        // 保证 `1 − PAN_UV·∂k/∂u ≥ 0.5`）。渲染幅度放大 = 梯度项等比放大 ⇒ 超过 2.79°
-        // 就变负 = 内容回折（画面软变形/糊）。这里把 k 的**对比度**按幅度反比压缩：
-        //   k' = uKMid + (k − uKMid)·uKScale,  uKScale = min(1, 安全幅度/当前幅度)
-        // ⇒ 梯度项恒定、永不折叠；幅度大只表现为"整体走得更远"。
-        // uKScale ≥ 1 时是恒等变换（≤2.6° 完全保持原行为）。
-        uniform float uKScale;
-        uniform float uKMid;
+        // **幅度越大越抹平深度场**（2026-11-14 晚，实测数据驱动）：
+        // 生成侧按 1.394° 标定 Lipschitz（`1 − PAN_UV·∂k/∂u ≥ 0.5`）。渲染幅度放大 ⇒ 梯度项
+        // 等比放大，实测三张缓存图：2° 回折 0.02%、4° 1–2.5%、6–10° 5–11%（= 肉眼看到的软变形）。
+        // 修法不是压对比度（那会把主体与背景的错位也压掉），而是**把场内梯度抹平**：
+        //   k' = mix(k, uKFlat, uKFlatten)
+        // uKFlatten 从 2° 开始升、到 4° 到 1 ⇒ 背景变成一块平板（内部不再摊开），
+        // 但主体与背景的整体错位（`k_fg − k_flat`）保留 ⇒ 幅度大依然"立体"，只是不再是逐像素。
+        uniform float uFlatK;
+        uniform float uFlatAmt;
         // 显示区域（2026-11-04）：uv' = uv * uUvScale + uUvOffset
         // scale = 1/zoom，offset = c − 0.5/zoom（见 `SpatialCrop`）。
         // ⚠️ 深度场与颜色**必须用同一套变换**，否则位移场和图像错位、主体会飘。
@@ -159,8 +160,8 @@ internal object SpatialGlCore {
                 float kf = f.a;
                 float g = 1.0 - clamp(abs(kb - kf) / max(uDkTh, 1e-3), 0.0, 1.0);
                 k = (uDepthCh > 0.5) ? mix(kf, kb, g) : kb;
-                // 幅度补偿：压缩深度对比度，让「梯度 × 幅度」恒定（见 uKScale 的说明）。
-                k = uKMid + (k - uKMid) * uKScale;
+                // 幅度补偿：把场内梯度逐渐抹平（见 uKFlatten 的说明）
+                k = mix(k, uFlatK, uFlatAmt);
             }
             k = clamp(k, 0.0, 1.0);
 
