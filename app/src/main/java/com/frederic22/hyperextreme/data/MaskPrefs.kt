@@ -640,6 +640,31 @@ class MaskPrefs(context: Context) {
     }
 
     /**
+     * 空间壁纸「位移幅度」满量程角（度，[SPATIAL_PAN_DEG_MIN]..[SPATIAL_PAN_DEG_MAX]，默认 10）。
+     *
+     * 与视差的 `parallaxGyroDeg` 是**两条独立的键**：视差是整层平移，空间是逐像素
+     * 深度位移，同一个角度在两边观感完全不同，不该共用一个值。
+     */
+    val spatialPanDeg: Float
+        get() = prefs.getFloat(KEY_SPATIAL_PAN_DEG, SPATIAL_PAN_DEG_DEFAULT)
+
+    fun setSpatialPanDeg(value: Float) {
+        prefs.edit().putFloat(KEY_SPATIAL_PAN_DEG, value).commit()
+    }
+
+    /**
+     * 空间壁纸「边缘融合」阈值（[SPATIAL_DK_MIN]..[SPATIAL_DK_MAX]，默认 0.08）。
+     *
+     * 对应 shader 的 `uDkTh`：调大 ⇒ 主体/背景之间的过渡带更宽，轮廓撕裂感下降。
+     */
+    val spatialEdgeFusion: Float
+        get() = prefs.getFloat(KEY_SPATIAL_EDGE_FUSION, SPATIAL_EDGE_FUSION_DEFAULT)
+
+    fun setSpatialEdgeFusion(value: Float) {
+        prefs.edit().putFloat(KEY_SPATIAL_EDGE_FUSION, value).commit()
+    }
+
+    /**
      * 「壁纸改变后自动关闭替换」（2026-10-15 加，**默认开**）—— 视差二级页开关。
      *
      * 打开时：视差生效中检测到"换壁纸"（判据见 hook 侧 `HookRuntime` 的视差分支）→ 自动关闭视差替换。
@@ -1065,6 +1090,8 @@ class MaskPrefs(context: Context) {
 
         /** 第 7 个参数（2026-10-13 用户加）：「最大幅度角度」（度）——转动的满量程角。 */
         const val KEY_PARALLAX_GYRO_DEG = "parallax_gyro_deg"
+    const val KEY_SPATIAL_PAN_DEG = "spatial_pan_deg"
+    const val KEY_SPATIAL_EDGE_FUSION = "spatial_edge_fusion"
 
         /** 「壁纸改变后自动关闭替换」（视差页开关，默认开）+ 「视差基准」壁纸判据（2026-10-15 加）。 */
         const val KEY_PARALLAX_AUTO_OFF = "parallax_auto_off_on_wallpaper_change"
@@ -1106,6 +1133,13 @@ class MaskPrefs(context: Context) {
         const val PARALLAX_GYRO_DEG_MIN = 15f
         const val PARALLAX_GYRO_DEG_MAX = 45f
         const val PARALLAX_GYRO_DEG_DEFAULT = 25f
+    /** 空间壁纸位移幅度：度。默认 10 = 渲染侧原来的编译期常量 `PAN_RAD`。 */
+    const val SPATIAL_PAN_DEG_MIN = 4f
+    const val SPATIAL_PAN_DEG_MAX = 20f
+    const val SPATIAL_PAN_DEG_DEFAULT = 10f
+    const val SPATIAL_DK_MIN = 0.02f
+    const val SPATIAL_DK_MAX = 0.30f
+    const val SPATIAL_EDGE_FUSION_DEFAULT = 0.08f
 
         /** 幅度上限公式里的安全边距（px）——「最大余量 − 5px」，用户定。 */
         const val PARALLAX_AMP_MARGIN_PX = 5f
