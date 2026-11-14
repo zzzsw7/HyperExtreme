@@ -76,6 +76,9 @@ class App : Application() {
             // 「显示区域」也要一起补推：渲染器在 SystemUI 进程读不到模块的 crop.json，
             // 只认这条属性；`debug.*` 不持久化，重启后不补就是默认（= 不裁剪）。
             val spatialKey = prefs.spatialKey.takeIf { it.isNotEmpty() }
+            // ⚠️ 「位移幅度 / 边缘融合」这两个调参值**必须一起补推**（2026-11-14）：
+            // `SpatialFlag.push` 的这两个参数有默认值（10° / 0.08），漏传就等于每次 App
+            // 冷启动把用户调好的值打回默认 —— 界面显示 5°、渲染按 10° 走。
             SpatialFlag.push(
                 prefs.spatialActive,
                 spatialKey,
@@ -86,6 +89,8 @@ class App : Application() {
                         com.frederic22.hyperextreme.spatial.SpatialCrop.read(this, it),
                     )
                 }.orEmpty(),
+                prefs.spatialPanDeg,
+                prefs.spatialEdgeFusion,
             )
             // 「光栅壁纸」同理：属性不持久化，重启后靠这里补回。
             //
