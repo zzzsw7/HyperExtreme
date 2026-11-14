@@ -312,8 +312,18 @@ internal object SpatialRenderer {
     private var uDkTh = 0
     /** AOD 压暗 uniform（v1.5.80 起压暗回到绘制阶段）。 */
     private var uDimLoc = 0
+    /** 「iOS 立体感」的投影三件套（2026-11-14）：开关 / 不透明度 / 偏移。 */
+    private var uShadowLoc = 0
+    private var uShadowALoc = 0
+    private var uUvNudgeLoc = 0
     private var layerCount = 0
     private var textures = IntArray(0)
+
+    /**
+     * 主体投影纹理（2026-11-14）：把 layer1 的 alpha 缩到 ≤256px 再模糊，当作投影遮罩。
+     * 0 = 没加载到（没有主体层 / 读取失败）⇒ iOS 模式只是没有投影，其余照旧。
+     */
+    private var shadowTex = 0
 
     /** 位移场纹理（layers/depth.png）。0 = 没加载到 ⇒ 退化成刚性位移。 */
     private var depthTex = 0
@@ -1373,6 +1383,9 @@ internal object SpatialRenderer {
         uDepthCh = GLES20.glGetUniformLocation(program, "uDepthCh")
         uDkTh = GLES20.glGetUniformLocation(program, "uDkTh")
         uDimLoc = GLES20.glGetUniformLocation(program, "uDim")
+        uShadowLoc = GLES20.glGetUniformLocation(program, "uShadow")
+        uShadowALoc = GLES20.glGetUniformLocation(program, "uShadowA")
+        uUvNudgeLoc = GLES20.glGetUniformLocation(program, "uUvNudge")
 
         // 位置 + UV：Bitmap 第 0 行在顶部，而 GL 的 (0,0) 在左下 ⇒ UV 的 y 要反过来
         val verts = floatArrayOf(
@@ -1405,8 +1418,11 @@ internal object SpatialRenderer {
 
         // 位移场：读不到就退化成"每层刚性位移"（等于旧行为，不至于整幅不动）
         depthTex = loadDepth(ctx, key)
+        // 主体投影遮罩：从 layer1 的 alpha 缩略 + 模糊得到（iOS 模式用）
+        shadowTex = loadShadow(ctx, key)
         HookRuntime.log(
-            "SPATIAL depth ${if (depthTex != 0) "OK" else "MISSING -> 退化刚性"} layers=$layerCount",
+            "SPATIAL depth ${if (depthTex != 0) "OK" else "MISSING -> 退化刚性"} layers=$layerCount" +
+                " shadow=${if (shadowTex != 0) "OK" else "none"}",
         )
 
         // 三、每份各画一帧并提交（首帧之后由传感器驱动，且只在姿态真的变了时才重绘）
@@ -2437,14 +2453,44 @@ internal object SpatialRenderer {
         GLES20.glUniform1f(uDimLoc, aodDim.coerceIn(0f, 1f))
 
         val drawCount = if (l0Only && only == SCENE_ALL) 1 else layerCount
+        // 「iOS 立体感」（2026-11-14）：主体刚性 + 背景慢跟随 + 主体投影。
+        val ios = SpatialTuning.iosMode
+        val baseSx = nx * SpatialTuning.panRad / g.spanX
+        val baseSy = np * SpatialTuning.panRad / g.spanY
+        GLES20.glUniform1f(uShadowLoc, 0f)
         for (i in 0 until drawCount) {           // 0 = 背景，先画
             // 拆分后：背景份只画 layer0、主体份只画 layer1（透明底）。合成结果与单 buffer 时一致 ——
             // 因为 layer0 不透明、layer1 走预乘 alpha 叠在它上面，数学上等价于两层各自出一张图再合成。
             if (only != SCENE_ALL && i != only) continue
+            // ① 主体投影：背景之后、主体之前多画一遍纯黑（用主体 alpha 的模糊图当遮罩）。
+            //    位移跟背景（影子贴在背景平面上），再按光向左上加一个固定偏移。
+            if (ios && i == 1 && shadowTex != 0) {
+                GLES20.glUniform1f(uShadowLoc, 1f)
+                GLES20.glUniform1f(uShadowALoc, SpatialTuning.IOS_SHADOW_ALPHA)
+                GLES20.glUniform2f(
+                    uUvNudgeLoc, SpatialTuning.IOS_SHADOW_DX, SpatialTuning.IOS_SHADOW_DY,
+                )
+                GLES20.glUniform2f(
+                    uShift, baseSx * SpatialTuning.IOS_BG_RATIO, baseSy * SpatialTuning.IOS_BG_RATIO,
+                )
+                GLES20.glUniform1f(uUseDepth, 0f)
+                GLES20.glUniform1f(uRigidK, 0f)
+                GLES20.glUniform1f(uOpaque, 0f)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shadowTex)
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                GLES20.glUniform1f(uShadowLoc, 0f)
+            }
             // **满量程**位移；k 在片元里算（背景逐像素，主体刚性）。
             // 除以 span 把「弧度」换算到 q0 空间 ⇒ 两向真实角位移相等 ⇒ 各向同性。
-            GLES20.glUniform2f(uShift, nx * SpatialTuning.panRad / g.spanX, np * SpatialTuning.panRad / g.spanY)
-            if (hasDepth) {
+            // iOS 模式：背景层位移 ×0.35（远处动得少），主体层 1.0 —— 这才是"卡片浮在照片前"。
+            val mul = if (ios && i == 0) SpatialTuning.IOS_BG_RATIO else 1f
+            GLES20.glUniform2f(uShift, baseSx * mul, baseSy * mul)
+            if (ios && i > 0) {
+                // ② 主体走刚性：整层一个 k、内部完全不形变（这是与"逐像素位移"最大的差别）
+                GLES20.glUniform1f(uUseDepth, 0f)
+                GLES20.glUniform1f(uDepthCh, 0f)
+                GLES20.glUniform1f(uRigidK, SpatialTuning.IOS_SUBJECT_K)
+            } else if (hasDepth) {
                 // 两层都逐像素：背景取 .r（已背景化），主体取 .a（原始深度）
                 GLES20.glUniform1f(uUseDepth, 1f)
                 GLES20.glUniform1f(uDepthCh, if (i == 0) 0f else 1f)
@@ -2556,6 +2602,91 @@ internal object SpatialRenderer {
         )
         GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4)
         return ids[0]
+    }
+
+    /**
+     * 主体投影遮罩（2026-11-14，「iOS 立体感」用）。
+     *
+     * 取 `layer1`（主体 RGBA）的 alpha → 按面积平均缩到长边 ≤256 → 3 遍盒式模糊 →
+     * 上传成 `GL_ALPHA` 纹理。采样用线性过滤，等效于在原尺寸上做了大半径模糊，
+     * 但**每帧只多一次纹理读取**（不做运行时多 tap，省 GPU）。读不到返回 0，
+     * iOS 模式就只是没有投影，其它照旧。
+     */
+    private fun loadShadow(ctx: Context, key: String): Int {
+        if (layerCount < 2) return 0
+        val bmp = runCatching {
+            val uri = Uri.parse("content://$AUTHORITY/spatial/$key/layer1.png")
+            val opt = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+            ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opt) }
+        }.getOrNull() ?: return 0
+        val w = bmp.width
+        val h = bmp.height
+        val src = IntArray(w * h)
+        bmp.getPixels(src, 0, w, 0, 0, w, h)
+        bmp.recycle()
+        val step = maxOf(1, maxOf(w, h) / 256)
+        val sw = (w / step).coerceAtLeast(1)
+        val sh = (h / step).coerceAtLeast(1)
+        var mask = ByteArray(sw * sh)
+        for (y in 0 until sh) {
+            for (x in 0 until sw) {
+                var sum = 0
+                for (dy in 0 until step) {
+                    val yy = (y * step + dy).coerceAtMost(h - 1)
+                    for (dx in 0 until step) {
+                        val xx = (x * step + dx).coerceAtMost(w - 1)
+                        sum += (src[yy * w + xx] ushr 24) and 0xFF
+                    }
+                }
+                mask[y * sw + x] = (sum / (step * step)).toByte()
+            }
+        }
+        // 3 遍盒式模糊 ≈ 高斯；半径按缩略图长边取 2%，投影才"散"得开
+        val r = (maxOf(sw, sh) / 40).coerceIn(1, 12)
+        repeat(3) { mask = boxBlur(mask, sw, sh, r) }
+
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
+        val buf = ByteBuffer.allocateDirect(sw * sh).order(ByteOrder.nativeOrder())
+        buf.put(mask)
+        buf.position(0)
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_ALPHA, sw, sh, 0,
+            GLES20.GL_ALPHA, GLES20.GL_UNSIGNED_BYTE, buf,
+        )
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4)
+        HookRuntime.log("SPATIAL 投影遮罩 ${sw}×$sh（源 ${w}×$h，模糊半径 $r）")
+        return ids[0]
+    }
+
+    /** 可分离盒式模糊（两遍）。[SpatialRenderer.loadShadow] 专用。 */
+    private fun boxBlur(src: ByteArray, w: Int, h: Int, r: Int): ByteArray {
+        if (r <= 0) return src
+        val tmp = ByteArray(w * h)
+        val out = ByteArray(w * h)
+        val div = 2 * r + 1
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                var sum = 0
+                for (k in -r..r) sum += src[row + (x + k).coerceIn(0, w - 1)].toInt() and 0xFF
+                tmp[row + x] = (sum / div).toByte()
+            }
+        }
+        for (x in 0 until w) {
+            for (y in 0 until h) {
+                var sum = 0
+                for (k in -r..r) sum += tmp[(y + k).coerceIn(0, h - 1) * w + x].toInt() and 0xFF
+                out[y * w + x] = (sum / div).toByte()
+            }
+        }
+        return out
     }
 
     private fun uploadTexture(bmp: Bitmap): Int {
