@@ -73,6 +73,7 @@ jobs:
         env:
           MC_CODE: ${{ github.run_number }}
         run: |
+          chmod +x gradlew          # 上游用 Windows 提交，gradlew 丢了可执行位
           ./gradlew assembleRelease --no-daemon --stacktrace \
             -PheVersionCode=$((900000 + MC_CODE)) \
             -PheVersionName="ci.$MC_CODE"
