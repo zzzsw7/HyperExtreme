@@ -93,6 +93,8 @@ class SpatialWallpaperService : WallpaperService() {
         private var uUvOffset = 0
         private var cropScale = 1f
         private var cropOffX = 0f
+        /** 「位移幅度」满量程角（弧度）。服务模式读一次 prefs，改幅度要重启壁纸才生效。 */
+        private var panRad = SpatialGlCore.PAN_RAD
         private var cropOffY = 0f
         private var loadedCropStamp = Long.MIN_VALUE
         private var quad: FloatBuffer? = null
@@ -502,6 +504,10 @@ class SpatialWallpaperService : WallpaperService() {
             // 只有 key / target 变了才需要重载层图；单纯 crop 变化到此为止
             // （调用方紧接着会 drawFrame，用新 uniform 出帧）。
             if (!force && key == loadedKey && stamp == loadedStamp) return
+            // 「位移幅度」：服务模式读一次 prefs（改幅度要重启壁纸才生效，与其它参数同语义）。
+            panRad = Math.toRadians(
+                com.frederic22.hyperextreme.data.MaskPrefs(ctx).spatialPanDeg.toDouble(),
+            ).toFloat()
             val dir = File(SpatialDepth.cacheRoot(ctx), key)
             if (!SpatialLayers.hasLayers(dir)) {
                 log("层图不存在：$key")
@@ -651,7 +657,7 @@ class SpatialWallpaperService : WallpaperService() {
             GLES20.glUniform1i(uDepth, 1)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
 
-            val g = SpatialGlCore.geometry(screenW, screenH, layerW, layerH)
+            val g = SpatialGlCore.geometry(screenW, screenH, layerW, layerH, panRad)
             GLES20.glUniform2f(uK, g.kx, g.ky)
             GLES20.glUniform2f(uSpan, g.spanX, g.spanY)
             GLES20.glUniform2f(uUvScale, cropScale, cropScale)
@@ -669,7 +675,7 @@ class SpatialWallpaperService : WallpaperService() {
             GLES20.glUniform1f(uDim, 1f)
 
             for (i in 0 until layerCount) {
-                GLES20.glUniform2f(uShift, nx * SpatialGlCore.PAN_RAD / g.spanX, np * SpatialGlCore.PAN_RAD / g.spanY)
+                GLES20.glUniform2f(uShift, nx * panRad / g.spanX, np * panRad / g.spanY)
                 if (hasDepth) {
                     GLES20.glUniform1f(uUseDepth, 1f)
                     GLES20.glUniform1f(uDepthCh, if (i == 0) 0f else 1f)
