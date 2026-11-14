@@ -1791,6 +1791,18 @@ internal object SpatialRenderer {
     }
 
     /**
+     * 调参（位移幅度 / 边缘融合 / iOS 开关）变了 → 强制重绘一帧。
+     *
+     * 渲染器平时**只在姿态变化时**重绘；手机放桌上不动时拖滑块，属性变了画面却不刷，
+     * 看起来像没生效。轮询线程发现 `SpatialTuning.revision` 变了就调这里。
+     */
+    internal fun redrawForTuning() {
+        if (runningKey == null) return
+        if (suspended) return
+        requestDraw(force = true)
+    }
+
+    /**
      * 请求重绘。
      *
      * `force=true`：**忽略「姿态没变」和 16ms 节流**。密码页的模糊比例是逐帧变的，
