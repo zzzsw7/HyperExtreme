@@ -394,7 +394,7 @@ internal object SpatialRenderer {
     @Volatile private var runningCropOffY = 0f
 
     /** 选择性融合的深度差阈值 —— AGSL 侧必须与 GL 用同一个值。 */
-    internal fun dkThreshold(): Float = DK_TH
+    internal fun dkThreshold(): Float = SpatialTuning.dkTh
 
     /**
      * 当前「显示区域」的三个 uniform：`[scale, offsetX, offsetY]`。
@@ -418,7 +418,7 @@ internal object SpatialRenderer {
     internal fun currentShift(spanX: Float, spanY: Float): FloatArray {
         val nx = (yaw / FULL_SCALE_RAD).coerceIn(-1f, 1f)
         val np = (pitch / FULL_SCALE_RAD).coerceIn(-1f, 1f)
-        return floatArrayOf(nx * PAN_RAD / spanX, np * PAN_RAD / spanY)
+        return floatArrayOf(nx * SpatialTuning.panRad / spanX, np * SpatialTuning.panRad / spanY)
     }
 
     /**
@@ -2379,6 +2379,8 @@ internal object SpatialRenderer {
      *   参数取值恰好等于层索引，所以循环里直接 `i != only` 过滤。
      */
     private fun drawScene(only: Int = SCENE_ALL) {
+        // 每帧读一次调参属性（内部 500ms 缓存）：滑块拖动时无需重启渲染器就能看到效果。
+        SpatialTuning.refresh()
         GLES20.glViewport(0, 0, screenW, screenH)
         GLES20.glClearColor(0f, 0f, 0f, 0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -2429,7 +2431,7 @@ internal object SpatialRenderer {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
 
         // 选择性融合的阈值（主体层用；背景层不读这个 uniform）
-        GLES20.glUniform1f(uDkTh, DK_TH)
+        GLES20.glUniform1f(uDkTh, SpatialTuning.dkTh)
 
         // AOD 压暗：只乘 RGB（压暗 ≠ 变透明）。GL 线程读 [aodDim]，改值时靠 requestDraw 重绘。
         GLES20.glUniform1f(uDimLoc, aodDim.coerceIn(0f, 1f))
@@ -2441,7 +2443,7 @@ internal object SpatialRenderer {
             if (only != SCENE_ALL && i != only) continue
             // **满量程**位移；k 在片元里算（背景逐像素，主体刚性）。
             // 除以 span 把「弧度」换算到 q0 空间 ⇒ 两向真实角位移相等 ⇒ 各向同性。
-            GLES20.glUniform2f(uShift, nx * PAN_RAD / g.spanX, np * PAN_RAD / g.spanY)
+            GLES20.glUniform2f(uShift, nx * SpatialTuning.panRad / g.spanX, np * SpatialTuning.panRad / g.spanY)
             if (hasDepth) {
                 // 两层都逐像素：背景取 .r（已背景化），主体取 .a（原始深度）
                 GLES20.glUniform1f(uUseDepth, 1f)
