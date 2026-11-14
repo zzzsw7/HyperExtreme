@@ -91,6 +91,11 @@ internal object RendererPollers {
     /** 空间壁纸开关 + 封面让位。返回 true 表示本轮已处理完（对应原来的 `continue`）。 */
     private fun tickSpatial() {
         spTick++
+        // 调参（位移幅度 / 边缘融合 / iOS 开关）变了 ⇒ 强制重绘一帧。
+        // 渲染器只在姿态变化时重绘，手机静止时拖滑块本来是看不到变化的（2026-11-14）。
+        val revBefore = SpatialTuning.revision
+        SpatialTuning.refresh()
+        if (SpatialTuning.revision != revBefore) SpatialRenderer.redrawForTuning()
         // **主通道 = 系统属性**（2026-10-23）：SystemUI 里读模块 prefs 不可靠 ——
         // `getRemotePreferences` 是陈旧快照，`openRemoteFile` 读不到文件。
         val propActive = HookRuntime.systemProperty(SpatialFlag.PROP_ACTIVE)
