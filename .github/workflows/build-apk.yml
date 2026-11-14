@@ -38,12 +38,15 @@ jobs:
           SDKM="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"
           echo "sdkmanager=$SDKM"
           yes | "$SDKM" --licenses > /dev/null 2>&1 || true
-          yes | "$SDKM" --install \
-            "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
-            "ndk;28.2.13676358" \
-            "cmake;3.22.1" > /dev/null
+          # 只装确定存在于稳定频道的包：platform 37 / build-tools 37 属于预览通道，
+          # 由 AGP 在构建时按需下载（许可已经接受过），这里装它们会让整条命令直接失败。
+          for pkg in "platform-tools" "ndk;28.2.13676358" "cmake;3.22.1"; do
+            echo "installing $pkg"
+            yes | "$SDKM" --install "$pkg" > /dev/null || echo "warn: $pkg install failed"
+          done
+          # 试着补上预览通道的 platform 37 / build-tools（装不上没关系，AGP 会自己拉）
+          yes | "$SDKM" --channel=3 --install "platforms;android-37" "build-tools;37.0.0" > /dev/null \
+            || echo "warn: preview platform/build-tools not available via sdkmanager"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
