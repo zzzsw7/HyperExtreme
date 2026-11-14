@@ -91,6 +91,7 @@ class App : Application() {
                 }.orEmpty(),
                 prefs.spatialPanDeg,
                 prefs.spatialEdgeFusion,
+                prefs.spatialIosMode,
             )
             // 「光栅壁纸」同理：属性不持久化，重启后靠这里补回。
             //
