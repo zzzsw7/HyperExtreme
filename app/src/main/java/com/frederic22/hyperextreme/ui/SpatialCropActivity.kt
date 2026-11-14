@@ -289,7 +289,12 @@ private fun CropScreen(key: String, onClose: () -> Unit) {
         if (b == null || canvasSize.width <= 0 || canvasSize.height <= 0) {
             null
         } else {
-            SpatialGlCore.geometry(canvasSize.width, canvasSize.height, b.width, b.height)
+            // 「位移幅度」要一起传：几何的安全边距随幅度抬（幅度大 ⇒ 画面略放大），
+            // 预览与渲染器必须用同一个值，否则裁剪框和实际显示会差几个百分点。
+            val panRad = Math.toRadians(
+                MaskPrefs(ctx).spatialPanDeg.toDouble(),
+            ).toFloat()
+            SpatialGlCore.geometry(canvasSize.width, canvasSize.height, b.width, b.height, panRad)
         }
     }
 
