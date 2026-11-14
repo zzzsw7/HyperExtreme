@@ -33,8 +33,10 @@ android {
         applicationId = "com.frederic22.hyperextreme"
         minSdk = 33
         targetSdk = 37
-        versionCode = 101
-        versionName = "1.0 Beta1"
+        // CI 构建可覆盖版本号：`-PheVersionCode=900123 -PheVersionName=ci.123`。
+        // 本地/发行构建不带这两个参数，行为与原来完全一致。
+        versionCode = (findProperty("heVersionCode") as String?)?.toInt() ?: 101
+        versionName = (findProperty("heVersionName") as String?) ?: "1.0 Beta1"
 
         ndk {
             abiFilters += "arm64-v8a"
