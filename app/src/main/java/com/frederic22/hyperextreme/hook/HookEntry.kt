@@ -485,14 +485,23 @@ class HookEntry : XposedModule() {
         preferencesBound = true
         val prefs = runCatching { getRemotePreferences(MaskPrefs.NAME) }.getOrNull()
         HookRuntime.bindRemotePreferences(prefs)
-        HookRuntime.bindRemotePreferencesFile {
-            openRemoteFile("shared_prefs/${MaskPrefs.NAME}.xml")
-                .use { java.io.FileInputStream(it.fileDescriptor).bufferedReader().readText() }
+        // The prefs file, but only when the framework actually lists it (2026-11-18): asking
+        // openRemoteFile for a path it does not have makes the service throw and log
+        // "Invalid path: shared_prefs/mask_swap.xml" with a full uncaught-remote-exception stack -
+        // the report's 1090 lines. Listed is not the same as openable, so HookRuntime still has a
+        // one-shot guard for the case where a listed file cannot be opened.
+        val remoteFiles = runCatching { listRemoteFiles() }.getOrNull()
+        val prefsFileListed = remoteFiles?.any { it.endsWith("${MaskPrefs.NAME}.xml") } == true
+        if (remoteFiles == null || prefsFileListed) {
+            HookRuntime.bindRemotePreferencesFile {
+                openRemoteFile("shared_prefs/${MaskPrefs.NAME}.xml")
+                    .use { java.io.FileInputStream(it.fileDescriptor).bufferedReader().readText() }
+            }
         }
         val visibleFiles = runCatching { listRemoteFiles()?.joinToString("、") }.getOrNull()
         HookRuntime.log(
             "景深开关通道：getRemotePreferences=${if (prefs != null) "ok" else "null"}；" +
-                "可读文件=[$visibleFiles]；「解除景深遮挡限制」当前=${
+                "可读文件=[$visibleFiles]；prefs 文件可用=$prefsFileListed；「解除景深遮挡限制」当前=${
                     HookRuntime.occlusionRemovedRemote()
                 }",
         )

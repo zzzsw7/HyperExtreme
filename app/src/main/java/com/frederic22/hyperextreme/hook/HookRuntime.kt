@@ -331,23 +331,32 @@ internal object HookRuntime {
      */
     private fun remoteText(): String? {
         if (remoteTextDead) return null
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (remoteTextAt != 0L && now - remoteTextAt < REMOTE_TEXT_CACHE_MS) return remoteTextValue
         val reader = remotePreferencesText ?: return null
-        val text = try {
-            reader()
-        } catch (error: Throwable) {
-            remoteTextDead = true
-            if (!remoteTextLogged) {
-                remoteTextLogged = true
-                log("远程 prefs 文件通道不可用（${error.javaClass.simpleName}），改用框架通道")
+        // One attempt at a time: at a cold start several hook points ask for a switch at once,
+        // and each of them used to try the file - four calls, four "Invalid path" stacks in the
+        // server's log for one process (verified 2026-11-18). Serialized, the first failure ends
+        // it for the rest.
+        synchronized(remoteTextLock) {
+            if (remoteTextDead) return null
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (remoteTextAt != 0L && now - remoteTextAt < REMOTE_TEXT_CACHE_MS) return remoteTextValue
+            val text = try {
+                reader()
+            } catch (error: Throwable) {
+                remoteTextDead = true
+                if (!remoteTextLogged) {
+                    remoteTextLogged = true
+                    log("远程 prefs 文件通道不可用（${error.javaClass.simpleName}），改用框架通道")
+                }
+                return null
             }
-            return null
+            remoteTextAt = now
+            remoteTextValue = text
+            return text
         }
-        remoteTextAt = now
-        remoteTextValue = text
-        return text
     }
+
+    private val remoteTextLock = Any()
 
     /**
      * 读「解除景深遮挡限制」—— 远程偏好优先，读不到再**直接读 prefs 文件**（两条都不需要 Context）。
