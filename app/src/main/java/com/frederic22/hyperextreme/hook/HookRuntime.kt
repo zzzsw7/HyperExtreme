@@ -39,7 +39,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal object HookRuntime {
 
     /** 配置快照的存活时间。编辑器读一次图会连续命中多个 hook 点，没必要每次都走 binder。 */
-    private const val CONFIG_TTL_MS = 1000L
+    private const val CONFIG_TTL_MS = 600_000L
 
     private const val STATE_FILE = ".glass_mask_state"
 
@@ -199,6 +199,44 @@ internal object HookRuntime {
             application = resolved
         }
         return resolved
+    }
+
+    /** The app broadcasts this whenever a setting is saved (see MaskPrefs). */
+    const val ACTION_CONFIG_CHANGED = "com.frederic22.hyperextreme.CONFIG_CHANGED"
+
+    private var configWatched = false
+
+    /**
+     * A saved setting invalidates the caches instead of waiting for them to expire. The provider is
+     * then asked once, right after the user changes something - not on every lock screen
+     * evaluation, which is what used to start the app process again once the system had reclaimed
+     * it (on device 2026-11-18 the app was only `prev`, with no provider connection held).
+     */
+    fun watchConfigChanges(context: Context) {
+        if (configWatched) return
+        configWatched = true
+        runCatching {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: android.content.Intent?) = invalidateConfig()
+            }
+            val filter = android.content.IntentFilter(ACTION_CONFIG_CHANGED)
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
+        }.onFailure { log("配置变化广播注册失败：$it") }
+    }
+
+    /** Drops every cached config snapshot, in this object and in the readers that keep their own. */
+    fun invalidateConfig() {
+        configAt = 0L
+        configValue = null
+        occlusionAt = 0L
+        occlusionValue = null
+        runCatching { LockScreenTone.invalidateConfig() }
+        runCatching { ParallaxBg.invalidateConfig() }
     }
 
     /** 取配置；配置一变就顺手把文件同步到磁盘上。 */

@@ -295,7 +295,7 @@ internal object ParallaxBg {
     private const val SUBJECT_COPY_OFFSET_Y = 0f
 
     /** 配置缓存时长（与 LockScreenTone 同款：锁屏一轮刷新可能连续命中，没必要次次跨进程）。 */
-    private const val CONFIG_TTL_MS = 3_000L
+    private const val CONFIG_TTL_MS = 600_000L
 
     /** 视图 id 名（`aapt2` 从真机 APK 资源表核对过）。 */
     private const val ID_BG_LAYER = "keyguard_background_layer"
@@ -1233,6 +1233,12 @@ internal object ParallaxBg {
      * （无 Context 也读得到，但拿不到 revision / 连续参数 —— 用默认值，仅极端场景可见的小代价）。
      * 读不到返回 null（调用方按「未开启」处理）。
      */
+    /** The app saved a setting: the provider is read again on the next use (see HookRuntime). */
+    fun invalidateConfig() {
+        configAt = 0L
+        configFailedAt = 0L
+    }
+
     private fun parallaxConfig(context: Context, force: Boolean = false): ParallaxConfig? {
         val now = SystemClock.elapsedRealtime()
         if (!force) {

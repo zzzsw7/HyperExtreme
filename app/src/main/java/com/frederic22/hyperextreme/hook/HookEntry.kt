@@ -485,6 +485,9 @@ class HookEntry : XposedModule() {
         preferencesBound = true
         val prefs = runCatching { getRemotePreferences(MaskPrefs.NAME) }.getOrNull()
         HookRuntime.bindRemotePreferences(prefs)
+        // A saved setting invalidates the cached config by broadcast, so the provider is asked once
+        // per change instead of on every lock screen evaluation (2026-11-18).
+        HookRuntime.appContext()?.let { HookRuntime.watchConfigChanges(it) }
         // The prefs file, but only when the framework actually lists it (2026-11-18): asking
         // openRemoteFile for a path it does not have makes the service throw and log
         // "Invalid path: shared_prefs/mask_swap.xml" with a full uncaught-remote-exception stack -

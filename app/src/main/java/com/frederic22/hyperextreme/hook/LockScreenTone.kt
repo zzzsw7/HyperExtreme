@@ -112,7 +112,7 @@ internal object LockScreenTone {
     private val OPAQUE_TINT_BLACK: ColorStateList = ColorStateList.valueOf(0xFF000000.toInt())
 
     /** 配置缓存时长：锁屏一轮刷新会连续命中多个 hook 点，没必要每次都跨进程读。 */
-    private const val CONFIG_TTL_MS = 3_000L
+    private const val CONFIG_TTL_MS = 600_000L
 
     /** 快捷方式那两条消息的键（SystemUI ⇄ 快捷方式插件之间的约定，字符串都在真机 dex 里核对过）。 */
     private const val ACTION_BOTTOM_ICON_DARK = "onBottomIconDarkModeChanged"
@@ -181,6 +181,13 @@ internal object LockScreenTone {
      * 读失败时**保留上一次的快照**（用户改开关通常只改动静默值，不要因为一次读失败就回退系统判定），
      * 并把"失败"也缓存 [CONFIG_TTL_MS]，避免高频 hook 打爆 binder。
      */
+
+    /** The app saved a setting: the provider is read again on the next use (see HookRuntime). */
+    fun invalidateConfig() {
+        configAt = 0L
+        configFailedAt = 0L
+    }
+
     private fun config(host: Any?): ToneConfig? {
         val now = SystemClock.elapsedRealtime()
         config?.let { fresh -> if (now - configAt < CONFIG_TTL_MS) return fresh }

@@ -14,6 +14,22 @@ class MaskPrefs(context: Context) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
+    private val appContext = context.applicationContext
+
+    /**
+     * 任何设置一保存就发一条广播（2026-11-18）：hook 侧收到后只**这一次**去读 provider，
+     * 其余时间用缓存 —— 否则锁屏/解锁路径上的每次求值都会 `call("config")`，
+     * App 被系统回收后就会被重新拉起（真机实测：App 只处于 `prev`、provider 无连接）。
+     */
+    private val configWatcher = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == null) return@OnSharedPreferenceChangeListener
+        runCatching { appContext.sendBroadcast(android.content.Intent(ACTION_CONFIG_CHANGED)) }
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(configWatcher)
+    }
+
     val revision: Long
         get() = prefs.getLong(KEY_REVISION, 0L)
 
@@ -915,6 +931,9 @@ class MaskPrefs(context: Context) {
     }
 
     companion object {
+        /** Same string as HookRuntime.ACTION_CONFIG_CHANGED; kept here so this class need not import the hook package. */
+        const val ACTION_CONFIG_CHANGED = "com.frederic22.hyperextreme.CONFIG_CHANGED"
+
         const val NAME = "mask_swap"
 
         /**
