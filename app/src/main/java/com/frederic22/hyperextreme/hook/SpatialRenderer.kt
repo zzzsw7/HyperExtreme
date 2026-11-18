@@ -1138,6 +1138,18 @@ internal object SpatialRenderer {
     private const val HIDDEN_DRAW_MS = 120L
 
     /**
+     * 亮屏后先不画到这一刻（`elapsedRealtime`），0 表示没有窗口。
+     *
+     * 2026-11-18 实测（HMC 的 `MCWake:` 探针，同一台机器、同一手势）：
+     * 空间壁纸开着时亮屏那次有 13–15 个掉帧、最差 ≈91ms；把 `debug.hyperextreme.spatial_active`
+     * 关掉就只有 1–3 个、最差 ≈33ms。也就是这几帧是我们自己画出来的，而且正好落在锁屏刚亮、
+     * SystemUI 首次绘制的那一小段里。亮屏时姿态本来没怎么变，少画 400ms 肉眼看不出来，
+     * 真正需要的那一帧由窗口结束时的 [forceDraw] 补齐。
+     */
+    @Volatile private var wakeHoldUntil = 0L
+    private const val WAKE_HOLD_MS = 400L
+
+    /**
      * **当前该画桌面份吗**（2026-10-30，v1.5.73）。
      *
      * ## 为什么必须独立成状态位
@@ -1618,6 +1630,8 @@ internal object SpatialRenderer {
                     return
                 }
                 if (i?.action != Intent.ACTION_SCREEN_ON) return
+                // 亮屏那几帧先不画（见 [wakeHoldUntil]，2026-11-18 实测）
+                wakeHoldUntil = SystemClock.elapsedRealtime() + WAKE_HOLD_MS
                 HookRuntime.log("SPATIAL 亮屏 → 重新注册传感器")
                 handler?.post {
                     // 诊断（2026-11-07）：亮屏时压暗渐变是否还在跑、值是多少、往哪走。
@@ -2361,6 +2375,14 @@ internal object SpatialRenderer {
             val now = SystemClock.elapsedRealtime()
             if (now - hiddenDrawAt < HIDDEN_DRAW_MS) return true
             hiddenDrawAt = now
+        }
+        // 亮屏窗口：先不画（见 [wakeHoldUntil]）。返回 true 与上面的合并节流同一口径：这一次
+        // 没有画，但也没有出错；窗口结束的那一帧 forceDraw 一次补齐。
+        if (wakeHoldUntil != 0L) {
+            if (SystemClock.elapsedRealtime() < wakeHoldUntil) return true
+            wakeHoldUntil = 0L
+            forceDraw()
+            return true
         }
         val wantLocked = activeMountIsLocked()
         val group = mounts.filter { it.locked == wantLocked }.ifEmpty { mounts }
