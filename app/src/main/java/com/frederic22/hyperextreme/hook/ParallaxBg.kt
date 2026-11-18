@@ -2154,7 +2154,7 @@ internal object ParallaxBg {
         if (coverDbgTick2++ % 60 == 0) {
             val bgV = backdropRef?.get()
             val subV = subjectRef?.get()
-            HookRuntime.log(
+            HookRuntime.vlog(
                 "PDSK 锁屏层尺寸：bg=${bgV?.width}x${bgV?.height} scale=${bgV?.scaleX} " +
                     "pivot=${bgV?.pivotX},${bgV?.pivotY}；" +
                     "subj=${subV?.width}x${subV?.height} scale=${subV?.scaleX} " +
@@ -2479,7 +2479,7 @@ internal object ParallaxBg {
         // 交接状态翻转时打一条（便于确认镜像是否真的接管了）。
         if (mirror != lastMirrored) {
             lastMirrored = mirror
-            HookRuntime.log(
+            HookRuntime.vlog(
                 if (mirror) {
                     "PDSK 无缝交接：镜像锁屏视图（bg=${bgTx},${bgTy} scale=$bgScl " +
                         "pivot=$bgPvX,$bgPvY）"
@@ -2490,7 +2490,7 @@ internal object ParallaxBg {
         }
         if (coverDbgTick++ % 40 == 0 || kotlin.math.abs(sx - lastSxLogged) > 0.2f) {
             lastSxLogged = sx
-            HookRuntime.log(
+            HookRuntime.vlog(
                 "PDSK 下发 sx=$sx sy=$sy bgTx=$bgTx bgTy=$bgTy " +
                     "subjTx=$sjTx 状态=$lastStatusBarState 镜像=$mirror",
             )

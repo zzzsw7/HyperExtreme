@@ -122,7 +122,7 @@ internal object RendererPollers {
             SpatialRenderer.resumeFromYield()
             spYielded = false
         }
-        if (spTick <= 3 || spTick % 120 == 0) {
+        if (spTick <= 3) {
             HookRuntime.log(
                 "SPATIAL 轮询 tick=${spTick} prop=[$propActive/$propKey/$propScope] ⇒ " +
                     "active=$active key=$key scope=$scope last=$spLastKey/$spLastScope",
@@ -179,7 +179,7 @@ internal object RendererPollers {
             }
             return
         }
-        if (raTick <= 3 || raTick % 120 == 0) {
+        if (raTick <= 3) {
             HookRuntime.log(
                 "RASTER 轮询 tick=${raTick} active=$active key=$key scope=$scope " +
                     "last=$raLastKey/$raLastScope",

@@ -1763,7 +1763,10 @@ internal object SpatialRenderer {
                         }
                     }
                     if (++frames % 120 == 0) {
-                        HookRuntime.log(
+                        // 详细日志（2026-11-18）：原来无条件打，静止时每 2.4s 一条 —— 9 小时里
+                        // 光 `SPATIAL tilt` 就 2200 条，是 systemui 日志洪水的一大来源
+                        // （report-20261118 §4）。只在设置里打开「详细日志」时才打。
+                        HookRuntime.vlog(
                             "SPATIAL tilt yaw=${"%.3f".format(yaw)} pitch=${"%.3f".format(pitch)}" +
                                 " rateY=${"%.2f".format(rateYaw)} homing=$homing",
                         )

@@ -886,7 +886,7 @@ internal object RasterRenderer {
         scheduleIdleCheck()
 
         if (++gyroFrames % 60 == 0) {
-            HookRuntime.log(
+            HookRuntime.vlog(
                 "RASTER gyro ω=${"%.2f".format(w)} rate=${"%.2f".format(gyroRate)} " +
                     "pan=${"%.3f".format(pan)}rad f=${"%.2f".format(fValue())} " +
                     "dir=${if (pan >= 0f) "+" else "-"} rot=${currentRotation()}",
